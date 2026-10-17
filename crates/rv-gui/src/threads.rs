@@ -1,9 +1,13 @@
 //! Project-wide overview of threads and tasks: one row per spawning function,
 //! one card per lane, with the channels and shared state each lane touches.
 
+use std::collections::HashMap;
+
 use egui::{Color32, RichText, Stroke, Ui};
-use rv_analysis::{Concurrency, End};
+use rv_analysis::{CallGraph, Concurrency, End, Facts, Program};
 use rv_ir::{Body, FnId, NodeId, Project};
+
+use crate::program_view::{GraphLayout, ProgramView};
 
 pub enum ThreadsAction {
     None,
@@ -15,6 +19,29 @@ pub enum ThreadsAction {
 #[derive(Default)]
 pub struct ThreadsView {
     cache: Option<(u64, Overview)>,
+    mode: Mode,
+    program: Option<(u64, ProgramData)>,
+    /// Index into the entry points.
+    entry: usize,
+    view: ProgramView,
+    /// Fit the graph on the next frame.
+    fit: bool,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum Mode {
+    #[default]
+    Program,
+    ByFunction,
+}
+
+/// Whole-program analysis, computed once per project version.
+struct ProgramData {
+    facts: Facts,
+    graph: CallGraph,
+    entries: Vec<FnId>,
+    /// Per entry point, computed on first use.
+    programs: HashMap<usize, (Program, GraphLayout)>,
 }
 
 struct Overview {
@@ -54,6 +81,110 @@ const CARD_WIDTH: f32 = 280.0;
 
 impl ThreadsView {
     pub fn ui(&mut self, ui: &mut Ui, project: &Project, generation: u64) -> ThreadsAction {
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.mode, Mode::Program, "program graph")
+                .on_hover_text("Threads from main on, with starts, channels and shared state");
+            ui.selectable_value(&mut self.mode, Mode::ByFunction, "by function")
+                .on_hover_text("Every function that starts threads, with its lanes");
+        });
+        match self.mode {
+            Mode::Program => self.program_ui(ui, project, generation),
+            Mode::ByFunction => self.by_function_ui(ui, project, generation),
+        }
+    }
+
+    fn program_ui(&mut self, ui: &mut Ui, project: &Project, generation: u64) -> ThreadsAction {
+        let mut action = ThreadsAction::None;
+        if self.program.as_ref().is_none_or(|(g, _)| *g != generation) {
+            let entries = rv_analysis::entry_points(project);
+            self.program = Some((
+                generation,
+                ProgramData {
+                    facts: Facts::new(project),
+                    graph: CallGraph::new(project),
+                    entries,
+                    programs: HashMap::new(),
+                },
+            ));
+            self.fit = true;
+        }
+        let data = &mut self.program.as_mut().expect("computed above").1;
+        if data.entries.is_empty() {
+            ui.weak("No `main` function found (library crate?). Use \"by function\".");
+            return action;
+        }
+        self.entry = self.entry.min(data.entries.len() - 1);
+
+        ui.horizontal_wrapped(|ui| {
+            let current = &project.function(data.entries[self.entry]).qual_path;
+            ui.label("program:");
+            egui::ComboBox::from_id_salt("program_entry")
+                .selected_text(RichText::new(current).monospace())
+                .show_ui(ui, |ui| {
+                    for (i, &e) in data.entries.iter().enumerate() {
+                        if ui
+                            .selectable_value(
+                                &mut self.entry,
+                                i,
+                                RichText::new(&project.function(e).qual_path).monospace(),
+                            )
+                            .clicked()
+                        {
+                            self.fit = true;
+                        }
+                    }
+                });
+            if ui.button("Fit").clicked() {
+                self.fit = true;
+            }
+            ui.separator();
+            ui.label(RichText::new("━ starts").color(Color32::from_rgb(130, 130, 130)));
+            ui.label(RichText::new("━ channel").color(Color32::from_rgb(0, 150, 165)));
+            ui.label(RichText::new("┅ shared state").color(Color32::from_rgb(150, 90, 210)));
+            ui.weak("· drag: move · Ctrl+wheel: zoom · double click: show code");
+        });
+
+        let entry = self.entry;
+        let (program, layout) = data.programs.entry(entry).or_insert_with(|| {
+            let p = rv_analysis::program(project, &data.facts, &data.graph, data.entries[entry]);
+            let l = crate::program_view::layout(project, &p);
+            (p, l)
+        });
+        ui.weak(format!(
+            "{} threads/tasks · {} channel connections · {} shared-state objects · syntactic call graph from {}",
+            program.threads.len(),
+            program.links.iter().filter(|l| matches!(l.kind, rv_analysis::LinkKind::Channel { .. })).count(),
+            program.resources.len(),
+            project.function(data.entries[entry]).name
+        ));
+        if !program.unreached.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    format!("{} thread starts not reached from main:", program.unreached.len()),
+                )
+                .on_hover_text("Called via trait objects, function pointers, macros or calls that could not be resolved unambiguously.");
+                for &(f, node) in &program.unreached {
+                    if ui.link(RichText::new(&project.function(f).qual_path).monospace()).clicked() {
+                        action = ThreadsAction::ShowNode(f, node);
+                    }
+                }
+            });
+        }
+        ui.separator();
+        if std::mem::take(&mut self.fit) {
+            let size = ui.available_size();
+            self.view.fit(layout, size);
+            self.view.selected = None;
+        }
+        match self.view.ui(ui, project, program, layout) {
+            ThreadsAction::None => {}
+            other => action = other,
+        }
+        action
+    }
+
+    fn by_function_ui(&mut self, ui: &mut Ui, project: &Project, generation: u64) -> ThreadsAction {
         if self.cache.as_ref().is_none_or(|(g, _)| *g != generation) {
             self.cache = Some((generation, overview(project)));
         }

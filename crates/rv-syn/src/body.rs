@@ -781,7 +781,7 @@ impl<'l, 'a> Embed<'l, 'a> {
     /// remembered for the call site.
     fn call_args<'e>(&mut self, args: impl Iterator<Item = &'e syn::Expr>, call: &mut CallSite) {
         for arg in args {
-            call.arg_count += 1;
+            call.args.push(arg_local(arg));
             let arg = unwrap(arg);
             if is_structure(arg) {
                 let parent = self.lower.container_node(&mut self.container);
@@ -789,24 +789,9 @@ impl<'l, 'a> Embed<'l, 'a> {
                     .push(self.lower.structure(parent, arg, None));
                 continue;
             }
-            match arg {
-                syn::Expr::Closure(_) => {
-                    call.inline_closures
-                        .push(one_line(&self.lower.p.text_of(arg.span())));
-                }
-                syn::Expr::Path(p) => {
-                    if let Some(name) = vars::local_name(p) {
-                        call.arg_names.push(name);
-                    }
-                }
-                syn::Expr::Reference(r) => {
-                    if let syn::Expr::Path(p) = unwrap(&r.expr)
-                        && let Some(name) = vars::local_name(p)
-                    {
-                        call.arg_names.push(name);
-                    }
-                }
-                _ => {}
+            if let syn::Expr::Closure(_) = arg {
+                call.inline_closures
+                    .push(one_line(&self.lower.p.text_of(arg.span())));
             }
             self.visit_expr(arg);
         }
@@ -820,8 +805,7 @@ impl<'l, 'a> Embed<'l, 'a> {
             literals: Vec::new(),
             structures: Vec::new(),
             inline_closures: Vec::new(),
-            arg_names: Vec::new(),
-            arg_count: 0,
+            args: Vec::new(),
             span: self.lower.span(span),
         }
     }
@@ -1019,6 +1003,18 @@ fn chain(
         syn::Expr::Try(t) => chain(&t.expr, path, literals),
         syn::Expr::Await(a) => chain(&a.base, path, literals),
         syn::Expr::Reference(r) => chain(&r.expr, path, literals),
+        _ => None,
+    }
+}
+
+/// The local variable an argument consists of: `x`, `&x`, `&mut x`, `x.clone()`.
+fn arg_local(e: &syn::Expr) -> Option<String> {
+    match unwrap(e) {
+        syn::Expr::Path(p) => vars::local_name(p),
+        syn::Expr::Reference(r) => arg_local(&r.expr),
+        syn::Expr::MethodCall(m) if m.method == "clone" && m.args.is_empty() => {
+            arg_local(&m.receiver)
+        }
         _ => None,
     }
 }

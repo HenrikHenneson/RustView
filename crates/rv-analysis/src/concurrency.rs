@@ -341,7 +341,7 @@ pub fn concurrency(body: &Body, flow: &DataFlow, aliases: &HashMap<String, Strin
             if c.kind == CallKind::Method && c.path.first().map(String::as_str) == Some("clone") {
                 c.receiver.clone()
             } else if c.kind == CallKind::Function && c.name() == "clone" {
-                c.arg_names.first().cloned()
+                c.args.first().cloned().flatten()
             } else {
                 None
             }
@@ -523,7 +523,7 @@ fn classify_spawn(
         }
         CallKind::Method => {
             if (name == "spawn" || name == "spawn_scoped")
-                && (call.arg_count == 0 || has("Command"))
+                && (call.args.is_empty() || has("Command"))
             {
                 // `std::process::Command::spawn()` starts a process, not a task.
                 None
