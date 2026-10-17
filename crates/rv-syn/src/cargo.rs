@@ -73,7 +73,7 @@ pub(crate) fn discover(path: &Path) -> Result<(Vec<PackageSpec>, Vec<Diagnostic>
     Ok((packages, diagnostics))
 }
 
-fn single_file(path: &Path) -> PackageSpec {
+pub(crate) fn single_file(path: &Path) -> PackageSpec {
     let name = path
         .file_stem()
         .map_or("main".into(), |s| s.to_string_lossy().into_owned());

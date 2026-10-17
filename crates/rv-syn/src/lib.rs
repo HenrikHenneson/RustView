@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use rv_ir::Project;
 
+mod body;
 mod cargo;
 mod modtree;
 mod source;
@@ -20,7 +21,7 @@ pub use cargo::{PackageSpec, TargetSpec};
 pub fn load(path: &Path) -> Result<Project> {
     let path = normalize_path(path);
     let (specs, diagnostics) = cargo::discover(&path)?;
-    let mut project = modtree::build(&path, &specs);
+    let mut project = modtree::build(&path, &specs, None);
     project.diagnostics.splice(0..0, diagnostics);
     // proc-macro2 keeps a thread-local map of every parsed file for span
     // lookups. All spans have been converted to rv-ir spans by now.
@@ -36,7 +37,16 @@ pub fn normalize_path(path: &Path) -> PathBuf {
 
 /// Load from already discovered package specs (no `cargo` invocation).
 pub fn load_specs(root: &Path, specs: &[PackageSpec]) -> Project {
-    let project = modtree::build(root, specs);
+    let project = modtree::build(root, specs, None);
+    proc_macro2::extra::invalidate_current_thread_spans();
+    project
+}
+
+/// Treat `text` as a single-file crate (for tests and snippets).
+pub fn load_str(text: &str) -> Project {
+    let path = PathBuf::from("snippet.rs");
+    let spec = cargo::single_file(&path);
+    let project = modtree::build(Path::new("."), &[spec], Some((path, text.to_string())));
     proc_macro2::extra::invalidate_current_thread_spans();
     project
 }

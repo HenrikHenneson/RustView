@@ -78,16 +78,25 @@ impl Parsed {
 /// trailing comma) that multi-line formatting leaves inside brackets.
 pub fn collapse_ws(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
+    let mut prev = "";
     for word in s.split_whitespace() {
-        let closes = word.starts_with([')', ']', '>', '}']);
-        if closes && out.ends_with(',') {
+        let closes_paren = word.starts_with([')', ']', '}']);
+        // `>` only closes generics after a trailing comma; otherwise it may be a comparison.
+        let closes_angle = word.starts_with('>') && out.ends_with(',');
+        if (closes_paren || closes_angle) && out.ends_with(',') {
             out.pop();
         }
-        if !out.is_empty() && !out.ends_with(['(', '[', '<']) && !(closes && !word.starts_with('}'))
-        {
+        let after_open = prev.ends_with(['(', '['])
+            || (prev.ends_with('<') && prev.len() > 1 && !prev.ends_with("<<"));
+        // Method chains and `?` continued on the next line.
+        let continues = (word.starts_with('.') && !word.starts_with("..")) || word.starts_with('?');
+        let glue =
+            after_open || continues || (closes_paren && !word.starts_with('}')) || closes_angle;
+        if !out.is_empty() && !glue {
             out.push(' ');
         }
         out.push_str(word);
+        prev = word;
     }
     out
 }
@@ -119,5 +128,22 @@ mod tests {
         );
         assert_eq!(collapse_ws("impl  Foo { }"), "impl Foo { }");
         assert_eq!(collapse_ws("f(a, b)"), "f(a, b)");
+        assert_eq!(collapse_ws("x > 0 && a < b"), "x > 0 && a < b");
+        assert_eq!(
+            collapse_ws(
+                "a()
+    .b()
+    ?"
+            ),
+            "a().b()?"
+        );
+        assert_eq!(collapse_ws("0 .. n"), "0 .. n");
+        assert_eq!(
+            collapse_ws(
+                "a <<
+ 2"
+            ),
+            "a << 2"
+        );
     }
 }

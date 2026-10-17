@@ -10,7 +10,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+mod body;
 mod span;
+
+pub use body::{Body, Exit, ExitKind, FrameRole, Node, NodeId, NodeKind, StmtKind, StructKind};
 pub use span::{LineCol, LineIndex, Span};
 
 macro_rules! id_type {
@@ -192,6 +195,8 @@ pub struct Function {
     pub name_span: Span,
     /// `None` for trait methods without default body.
     pub body_span: Option<Span>,
+    /// Structure of the body; `None` without body.
+    pub body: Option<Body>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

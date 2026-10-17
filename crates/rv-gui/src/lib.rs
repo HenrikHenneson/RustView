@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 mod app;
 mod code_view;
+mod diagram;
 mod editor;
 mod highlight;
 mod loader;
