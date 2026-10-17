@@ -1,0 +1,13 @@
+[package]
+name = "rv-analysis"
+description = "Backend-independent analyses on rv-ir (data flow, concurrency)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+rv-ir.workspace = true
+
+[dev-dependencies]
+rv-syn.workspace = true

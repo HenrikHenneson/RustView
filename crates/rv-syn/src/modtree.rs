@@ -375,7 +375,7 @@ impl Builder {
         let name = sig.ident.unraw().to_string();
         let name_span = p.span(file, sig.ident.span());
         let body =
-            block.map(|b| crate::body::lower(p, file, &name, b, span.clone(), name_span.clone()));
+            block.map(|b| crate::body::lower(p, file, sig, b, span.clone(), name_span.clone()));
         let qual_path = match &owner {
             FnOwner::Free => format!("{}::{name}", self.project.module(m).qual_name()),
             FnOwner::Impl { self_ty, .. } => format!(

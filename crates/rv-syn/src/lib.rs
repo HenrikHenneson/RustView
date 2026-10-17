@@ -13,6 +13,7 @@ mod body;
 mod cargo;
 mod modtree;
 mod source;
+mod vars;
 
 pub use cargo::{PackageSpec, TargetSpec};
 

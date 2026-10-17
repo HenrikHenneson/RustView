@@ -44,6 +44,45 @@ pub struct Node {
     /// Number of `?` operators directly in this statement or structure
     /// header (not in nested closures or structures).
     pub tries: u32,
+    /// Variables this node introduces (`let` patterns, match arm patterns,
+    /// loop patterns, parameters). Visible after the node, or inside it for frames.
+    pub defs: Vec<VarDef>,
+    /// Variables read or written by this node itself (not by nested structures),
+    /// in source order.
+    pub uses: Vec<VarUse>,
+}
+
+/// A variable introduced by a pattern.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VarDef {
+    pub name: String,
+    pub span: Span,
+    pub mutable: bool,
+}
+
+/// A mention of a local variable name. Whether it really refers to a local
+/// variable is decided by name resolution (`rv-analysis`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VarUse {
+    pub name: String,
+    pub span: Span,
+    pub mode: UseMode,
+    /// `false` if guessed from the tokens of a macro that is not understood.
+    pub certain: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UseMode {
+    Read,
+    /// `x = ...`, `x.field = ...`, `*x = ...`
+    Assign,
+    /// `x += ...`
+    CompoundAssign,
+    /// `&mut x`
+    RefMut,
+    /// Receiver of a method call: mutates if the method takes `&mut self`,
+    /// which syntax alone cannot tell.
+    MethodRecv,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

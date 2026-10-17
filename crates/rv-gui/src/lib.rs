@@ -9,6 +9,7 @@ mod editor;
 mod highlight;
 mod loader;
 mod tree;
+mod wires;
 
 pub use editor::{DEFAULT_TEMPLATE as DEFAULT_EDITOR, EditorCommand};
 

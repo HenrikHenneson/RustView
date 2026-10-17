@@ -23,17 +23,26 @@ the triangle to expand/collapse a structure and ◀ ▶ to switch cases. Clickin
 line in the code panel selects the matching node in the diagram. Drag to move,
 Ctrl+wheel to zoom. Files are reloaded on change.
 
+Data wires connect the place where a local variable gets its value to the
+places that use it (hover a wire for the name). Changes (`=`, `+=`, `&mut`,
+`push`, ...) are drawn as orange sequence wires; dashed means "a method call on
+a `mut` variable that may change it" or "guessed from an unexpanded macro".
+A structure that changes a variable is its source afterwards (like a LabVIEW
+output tunnel). In `auto` mode large diagrams only show the wires of the
+selected or hovered node.
+
 ## Crates
 
 | crate      | role |
 |------------|------|
 | `rv-ir`    | backend-independent model (project, modules, functions, spans) |
 | `rv-syn`   | frontend: `cargo metadata` + `syn` → `rv-ir` |
+| `rv-analysis` | data flow (name resolution, def-use, mutation edges) |
 | `rv-layout`| diagram geometry (nested frames, both orientations), no GUI dependency |
 | `rv-gui`   | egui application |
 | `rustview` | binary / CLI |
 
-`rv-analysis` (def-use, concurrency) follows with M3/M4.
+Concurrency analysis follows with M4.
 
 ## Limits
 

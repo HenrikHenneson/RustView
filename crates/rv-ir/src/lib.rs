@@ -13,7 +13,10 @@ use std::sync::Arc;
 mod body;
 mod span;
 
-pub use body::{Body, Exit, ExitKind, FrameRole, Node, NodeId, NodeKind, StmtKind, StructKind};
+pub use body::{
+    Body, Exit, ExitKind, FrameRole, Node, NodeId, NodeKind, StmtKind, StructKind, UseMode, VarDef,
+    VarUse,
+};
 pub use span::{LineCol, LineIndex, Span};
 
 macro_rules! id_type {
