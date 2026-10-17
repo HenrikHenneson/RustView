@@ -31,6 +31,10 @@ pub enum EdgeKind {
     Mutation,
     /// Method call on a `mut` binding: changes it if the method takes `&mut self`.
     PossibleMutation,
+    /// The value written in one loop iteration is read in the next one
+    /// (LabVIEW: shift register). From the last writer in the loop to the
+    /// first use in the loop.
+    LoopCarried,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -48,6 +52,8 @@ pub struct Edge {
 pub struct DataFlow {
     pub bindings: Vec<Binding>,
     pub edges: Vec<Edge>,
+    /// (loop, binding): values carried from one iteration to the next.
+    pub shift_registers: Vec<(NodeId, usize)>,
 }
 
 impl DataFlow {
@@ -75,6 +81,7 @@ impl DataFlow {
                     EdgeKind::Data => "",
                     EdgeKind::Mutation => " [mut]",
                     EdgeKind::PossibleMutation => " [mut?]",
+                    EdgeKind::LoopCarried => " [loop]",
                 };
                 let guess = if e.certain { "" } else { " (guess)" };
                 format!(
@@ -126,6 +133,8 @@ struct Marker {
     node: NodeId,
     /// Bindings changed while the marker was open.
     written: HashSet<usize>,
+    /// First node inside that reads a binding declared outside.
+    first_read: HashMap<usize, NodeId>,
 }
 
 impl Analyzer<'_> {
@@ -209,6 +218,13 @@ impl Analyzer<'_> {
                 }
             };
             self.edge(self.writer[b], id, b, kind, u.certain);
+            if u.mode != UseMode::Assign {
+                // Remember where each open structure first reads it.
+                let decl = self.decl_depth[b];
+                for m in self.markers.iter_mut().skip(decl) {
+                    m.first_read.entry(b).or_insert(id);
+                }
+            }
             if writes {
                 self.writer[b] = id;
                 if let Some(m) = self.markers.last_mut() {
@@ -238,6 +254,7 @@ impl Analyzer<'_> {
         self.markers.push(Marker {
             node,
             written: HashSet::new(),
+            first_read: HashMap::new(),
         });
     }
 
@@ -246,6 +263,27 @@ impl Analyzer<'_> {
     fn close(&mut self) {
         let Some(m) = self.markers.pop() else { return };
         let depth = self.markers.len();
+        let is_loop = matches!(&self.body.node(m.node).kind, NodeKind::Structure { kind, .. } if kind.is_loop());
+        if is_loop {
+            let mut carried: Vec<usize> = m
+                .written
+                .iter()
+                .copied()
+                .filter(|b| self.decl_depth[*b] <= depth && m.first_read.contains_key(b))
+                .collect();
+            carried.sort();
+            for b in carried {
+                // Last writer inside the loop feeds the first read of the next round.
+                self.edge(
+                    self.writer[b],
+                    m.first_read[&b],
+                    b,
+                    EdgeKind::LoopCarried,
+                    true,
+                );
+                self.flow.shift_registers.push((m.node, b));
+            }
+        }
         for b in m.written {
             if self.decl_depth[b] <= depth {
                 self.writer[b] = m.node;

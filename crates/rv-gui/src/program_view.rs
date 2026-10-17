@@ -550,3 +550,67 @@ fn dist(p: Pos2, a: Pos2, b: Pos2) -> f32 {
     };
     (p - (a + ab * t)).length()
 }
+
+/// The program graph as SVG in light colors.
+pub fn svg(project: &Project, program: &Program, g: &GraphLayout) -> String {
+    use crate::export::Svg;
+    let mut svg = Svg::new(g.size);
+    for a in arrows(project, program, g) {
+        let pts = sample(&a.points, 24);
+        if a.dashed {
+            svg.polyline(&pts, a.width, a.color, Some((3.0, 4.0)));
+        } else if a.head {
+            svg.arrow(&pts, a.width, a.color, None);
+        } else {
+            svg.polyline(&pts, a.width, a.color, None);
+        }
+        if let Some(label) = &a.label {
+            let mid = pts[pts.len() / 2];
+            let w = label.chars().count() as f32 * 6.6 + 4.0;
+            svg.rect(
+                Rect::from_center_size(mid, vec2(w, 15.0)),
+                Color32::WHITE,
+                None,
+                3.0,
+            );
+            svg.text_fit(
+                mid - vec2(w / 2.0 - 2.0, 6.5),
+                label,
+                11.0,
+                a.color,
+                true,
+                false,
+                Some(w - 4.0),
+            );
+        }
+    }
+    for b in &g.boxes {
+        let border = match b.kind {
+            BlockKind::Thread(0) => Color32::from_gray(60),
+            BlockKind::Thread(_) => THREAD_COLOR,
+            BlockKind::Resource(_) => SHARED_COLOR,
+        };
+        svg.rect(b.rect, Color32::WHITE, Some((2.0, border)), 6.0);
+        for (i, (text, style)) in b.lines.iter().enumerate() {
+            let (size, color, mono, bold) = match style {
+                LineStyle::Title => (13.0, Color32::from_gray(20), false, true),
+                LineStyle::Normal => (12.0, Color32::from_gray(40), true, false),
+                LineStyle::Weak => (12.0, Color32::from_gray(120), false, false),
+            };
+            let shown: String = if text.chars().count() > 40 {
+                text.chars().take(39).chain(['…']).collect()
+            } else {
+                text.clone()
+            };
+            svg.text(
+                b.rect.min + vec2(PAD, PAD + i as f32 * LINE),
+                &shown,
+                size,
+                color,
+                mono,
+                bold,
+            );
+        }
+    }
+    svg.finish()
+}

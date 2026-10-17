@@ -26,6 +26,8 @@ pub enum DiagramAction {
     Open(NodeId),
     /// A sub-expression was clicked: show exactly this part of the code.
     ShowSpan(rv_ir::Span),
+    /// Status message (e.g. after an export).
+    Message(String),
 }
 
 /// Per-function view state, kept while switching between functions.
@@ -58,6 +60,8 @@ pub struct DiagramView {
     pub wire_mode: WireMode,
     /// New function views start with the expression level on.
     pub expressions_by_default: bool,
+    /// "Export…" was clicked; done once the layout is there.
+    export_requested: bool,
     /// Wire geometry for the current layout.
     wire_cache: Option<(LayoutKey, Vec<wires::Wire>)>,
     pub selected: Option<NodeId>,
@@ -329,17 +333,34 @@ impl DiagramView {
                             StrokeKind::Outside,
                         );
                     }
+                    if s.expanded
+                        && let Some(regs) = analysis.registers.get(&item.node)
+                    {
+                        // Shift register terminals on both borders, below the header.
+                        let c = wires::color("", WireKind::LoopBack, style.dark);
+                        for k in 0..regs.len() {
+                            let y = s.header.max.y + 8.0 + k as f32 * 14.0;
+                            for x in [item.rect.min.x, item.rect.max.x] {
+                                let sq = to_screen(Rect::from_center_size(
+                                    egui::pos2(x, y),
+                                    vec2(9.0, 9.0),
+                                ));
+                                painter.rect_filled(sq, 1.0, c);
+                            }
+                        }
+                    }
                     draw_triangle(&painter, to_screen(s.toggle), s.expanded, style.text);
                     if let Some(p) = &s.prefix {
                         text(p.rect, &p.text, style.weak);
                     }
                     text(s.title.rect, &s.title.text, style.text);
                     if let Some(n) = &s.note {
+                        // Lane color, blue for shift registers / expressions.
                         let c = analysis
                             .lane_color
                             .get(&item.node)
                             .copied()
-                            .unwrap_or(style.exit);
+                            .unwrap_or_else(|| wires::color("", WireKind::LoopBack, style.dark));
                         text(n.rect, &n.text, c);
                     }
                     if let Some(i) = &s.info {
@@ -431,6 +452,36 @@ impl DiagramView {
                     Stroke::new(2.5, style.selected),
                     StrokeKind::Outside,
                 );
+            }
+        }
+
+        // Exit markers: where `return`, `break`, `continue` and `?` leave a
+        // structure, on its right border at the height of the exit.
+        let mut exit_marks: HashSet<(NodeId, i32)> = HashSet::new();
+        for e in &body.exits {
+            let (Some(target), Some(from)) = (e.target, layout.item(e.from)) else {
+                continue;
+            };
+            let y = from.rect.min.y + (from.rect.height() / 2.0).min(11.0);
+            let mut cur = body.node(e.from).parent;
+            while let Some(n) = cur {
+                if n == target {
+                    break;
+                }
+                if let Some(item) = layout.item(n)
+                    && matches!(item.kind, ItemKind::Structure(_))
+                    && exit_marks.insert((n, y as i32))
+                {
+                    let tip = origin + vec2(item.rect.max.x + 7.0, y) * zoom;
+                    let s = 5.0 * zoom.max(0.6);
+                    let base = tip - vec2(2.0 * s, 0.0);
+                    painter.add(egui::Shape::convex_polygon(
+                        vec![tip, base + vec2(0.0, -s), base + vec2(0.0, s)],
+                        style.exit,
+                        Stroke::NONE,
+                    ));
+                }
+                cur = body.node(n).parent;
             }
         }
 
@@ -563,6 +614,14 @@ impl DiagramView {
         } else if let Some(item) = hovered {
             response.on_hover_ui_at_pointer(|ui| tooltip(ui, project, body, item.node));
         }
+        if std::mem::take(&mut self.export_requested) {
+            let name = crate::export::file_name(&func.qual_path);
+            if let Some(msg) =
+                crate::export::export(&name, || self.svg(project, f).unwrap_or_default())
+            {
+                action = DiagramAction::Message(msg);
+            }
+        }
         action
     }
 
@@ -678,6 +737,13 @@ impl DiagramView {
                     .min(target.y / layout.size.y)
                     .clamp(MIN_ZOOM, 1.0);
                 view.pan = Vec2::splat(MARGIN);
+            }
+            if ui
+                .button("Export…")
+                .on_hover_text("Save the whole diagram as SVG or PNG")
+                .clicked()
+            {
+                self.export_requested = true;
             }
             ui.weak("drag: move · wheel: scroll · Ctrl+wheel: zoom");
         });
@@ -805,6 +871,7 @@ fn wire_tooltip(ui: &mut Ui, body: &Body, a: &Analysis, w: &wires::Wire) {
                 EdgeKind::Data => "data",
                 EdgeKind::Mutation => "changes it",
                 EdgeKind::PossibleMutation => "may change it (method call on a `mut` variable)",
+                EdgeKind::LoopCarried => "carried into the next loop iteration (shift register)",
             };
             (what.to_string(), e.certain)
         }
@@ -829,6 +896,8 @@ struct Analysis {
     notes: rv_layout::Notes,
     /// Lane structures and statements that start an inline lane.
     lane_color: HashMap<NodeId, Color32>,
+    /// Shift registers per loop.
+    registers: HashMap<NodeId, Vec<String>>,
 }
 
 /// Colors of parallel lanes.
@@ -856,6 +925,7 @@ impl Analysis {
                     EdgeKind::Data => WireKind::Data,
                     EdgeKind::Mutation => WireKind::Mutation,
                     EdgeKind::PossibleMutation => WireKind::PossibleMutation,
+                    EdgeKind::LoopCarried => WireKind::LoopBack,
                 },
                 certain: e.certain,
                 name: flow.binding(e).name.clone(),
@@ -945,7 +1015,26 @@ impl Analysis {
                 }
             }
         }
+        // Shift registers: one note per loop.
+        let mut registers: HashMap<NodeId, Vec<String>> = HashMap::new();
+        for &(lp, b) in &flow.shift_registers {
+            registers
+                .entry(lp)
+                .or_default()
+                .push(flow.bindings[b].name.clone());
+        }
+        for (lp, names) in &registers {
+            let label = format!("⟳ {}", names.join(", "));
+            notes
+                .entry(*lp)
+                .and_modify(|n: &mut String| {
+                    n.push_str(" · ");
+                    n.push_str(&label);
+                })
+                .or_insert(label);
+        }
         Analysis {
+            registers,
             flow,
             conc,
             specs,
@@ -1103,4 +1192,258 @@ fn expr_color(kind: rv_ir::ExprKind, text: &str, dark: bool, body: &Body) -> Col
 fn lerp(a: Color32, b: Color32, t: f32) -> Color32 {
     let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
     Color32::from_rgb(mix(a.r(), b.r()), mix(a.g(), b.g()), mix(a.b(), b.b()))
+}
+
+impl DiagramView {
+    /// The current function diagram (as laid out) as SVG in light colors.
+    pub fn svg(&self, project: &Project, f: FnId) -> Option<String> {
+        let body = project.function(f).body.as_ref()?;
+        let (_, layout) = self.cached.as_ref()?;
+        let (_, analysis) = self.analysis.as_ref()?;
+        let wires = self
+            .wire_cache
+            .as_ref()
+            .map_or(&[][..], |(_, w)| w.as_slice());
+        Some(diagram_svg(
+            body,
+            layout,
+            analysis,
+            wires,
+            self.wire_mode,
+            self.selected,
+        ))
+    }
+}
+
+fn diagram_svg(
+    body: &Body,
+    layout: &Layout,
+    analysis: &Analysis,
+    wire_list: &[wires::Wire],
+    mode: WireMode,
+    selected: Option<NodeId>,
+) -> String {
+    use crate::export::Svg;
+    let style = Palette::new(&egui::Visuals::light());
+    // Which data wires to include: what the view shows without hovering.
+    let data_wires = wire_list
+        .iter()
+        .filter(|w| !w.kind.is_concurrency())
+        .count();
+    let mode = match mode {
+        WireMode::Auto if data_wires <= wires::AUTO_LIMIT => WireMode::All,
+        WireMode::Auto => WireMode::Selected,
+        other => other,
+    };
+    let shown: Vec<&wires::Wire> = wire_list
+        .iter()
+        .filter(|w| {
+            w.kind.is_concurrency()
+                || match mode {
+                    WireMode::All => true,
+                    WireMode::Off => false,
+                    _ => selected.is_some_and(|n| w.touches(n, &analysis.specs)),
+                }
+        })
+        .collect();
+    let mut size = layout.size;
+    for w in &shown {
+        for p in w.points {
+            size = size.max(p.to_vec2() + vec2(12.0, 12.0));
+        }
+    }
+    let mut svg = Svg::new(size);
+    let text = |svg: &mut Svg, t: &rv_layout::Text, color: Color32| {
+        svg.text_fit(
+            t.rect.min,
+            &t.text,
+            FONT_SIZE,
+            color,
+            true,
+            false,
+            Some(t.rect.width()),
+        );
+    };
+    for item in &layout.items {
+        let r = item.rect;
+        let node = body.node(item.node);
+        match (&item.kind, &node.kind) {
+            (ItemKind::Structure(s), NodeKind::Structure { kind, .. }) => {
+                let color = style.structure(kind);
+                let width = if kind.is_loop() { 3.0 } else { 1.5 };
+                svg.rect(r, style.frame_bg(item.depth), Some((width, color)), 4.0);
+                svg.rect(s.header, color.gamma_multiply(0.35), None, 4.0);
+                if let Some(&lane) = analysis.lane_color.get(&item.node) {
+                    svg.rect(r.expand(3.0), Color32::TRANSPARENT, Some((3.0, lane)), 6.0);
+                }
+                if let Some(p) = &s.prefix {
+                    text(&mut svg, p, style.weak);
+                }
+                text(&mut svg, &s.title, style.text);
+                if let Some(n) = &s.note {
+                    let c = analysis
+                        .lane_color
+                        .get(&item.node)
+                        .copied()
+                        .unwrap_or_else(|| wires::color("", WireKind::LoopBack, false));
+                    text(&mut svg, n, c);
+                }
+                if let Some(i) = &s.info {
+                    text(
+                        &mut svg,
+                        i,
+                        if i.text.contains("exits") {
+                            style.exit
+                        } else {
+                            style.weak
+                        },
+                    );
+                }
+                if s.expanded
+                    && let Some(regs) = analysis.registers.get(&item.node)
+                {
+                    let c = wires::color("", WireKind::LoopBack, false);
+                    for k in 0..regs.len() {
+                        let y = s.header.max.y + 8.0 + k as f32 * 14.0;
+                        for x in [r.min.x, r.max.x] {
+                            svg.rect(
+                                Rect::from_center_size(egui::pos2(x, y), vec2(9.0, 9.0)),
+                                c,
+                                None,
+                                1.0,
+                            );
+                        }
+                    }
+                }
+            }
+            (ItemKind::Frame { title }, NodeKind::Frame { .. }) => {
+                svg.rect(
+                    r,
+                    style.frame_bg(item.depth + 1),
+                    Some((1.0, style.frame_line)),
+                    4.0,
+                );
+                if let Some(t) = title {
+                    text(&mut svg, t, style.case_title);
+                }
+            }
+            (
+                ItemKind::Stmt {
+                    text: t,
+                    badges,
+                    note,
+                },
+                NodeKind::Stmt { kind },
+            ) => {
+                svg.rect(r, style.stmt(kind), Some((1.0, style.stmt_line(kind))), 4.0);
+                text(&mut svg, t, style.text);
+                if let Some(b) = badges {
+                    text(&mut svg, b, style.exit);
+                }
+                if let Some(&lane) = analysis.lane_color.get(&item.node) {
+                    svg.rect(
+                        Rect::from_min_size(r.min, vec2(4.0, r.height())),
+                        lane,
+                        None,
+                        0.0,
+                    );
+                    if let Some(n) = note {
+                        text(&mut svg, n, lane);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    // Exit markers where control leaves a structure.
+    let mut marks: HashSet<(NodeId, i32)> = HashSet::new();
+    for e in &body.exits {
+        let (Some(target), Some(from)) = (e.target, layout.item(e.from)) else {
+            continue;
+        };
+        let y = from.rect.min.y + (from.rect.height() / 2.0).min(11.0);
+        let mut cur = body.node(e.from).parent;
+        while let Some(n) = cur {
+            if n == target {
+                break;
+            }
+            if let Some(item) = layout.item(n)
+                && matches!(item.kind, ItemKind::Structure(_))
+                && marks.insert((n, y as i32))
+            {
+                let tip = egui::pos2(item.rect.max.x + 7.0, y);
+                svg.polygon(
+                    &[tip, tip + vec2(-10.0, -5.0), tip + vec2(-10.0, 5.0)],
+                    style.exit,
+                );
+            }
+            cur = body.node(n).parent;
+        }
+    }
+    // Expression trees.
+    for &(a, b) in &layout.expr_wires {
+        svg.arrow(&[a, b], 1.2, style.weak, None);
+    }
+    for e in &layout.exprs {
+        let tree = body
+            .node(e.stmt)
+            .expr
+            .as_ref()
+            .expect("expression items come from trees");
+        let n = &tree.nodes[e.index];
+        let base = expr_color(n.kind, &n.text, false, body);
+        svg.rect(e.rect, lerp(style.bg, base, 0.22), Some((1.0, base)), 3.0);
+        text(&mut svg, &e.text, style.text);
+    }
+    // Wires.
+    for w in shown {
+        let pts = w.sample().collect::<Vec<_>>();
+        let color = wires::color(&w.name, w.kind, false);
+        let (width, dash) = match w.kind {
+            WireKind::Channel => (3.0, None),
+            WireKind::Shared => (2.0, Some((2.0, 4.0))),
+            WireKind::LoopBack => (2.0, Some((9.0, 4.0))),
+            WireKind::PossibleMutation => (1.4, Some((6.0, 4.0))),
+            _ if !w.certain => (1.4, Some((6.0, 4.0))),
+            WireKind::Mutation => (1.6, None),
+            WireKind::Data => (1.4, None),
+        };
+        if w.kind == WireKind::Shared {
+            svg.polyline(&pts, width, color, dash);
+        } else {
+            svg.arrow(&pts, width, color, dash);
+        }
+    }
+    svg.finish()
+}
+
+/// Diagram of a function with default expansion, for exports without a window.
+pub(crate) fn function_svg(project: &Project, f: FnId) -> Option<String> {
+    let body = project.function(f).body.as_ref()?;
+    let analysis = Analysis::new(body, project);
+    let state = ViewState::default();
+    let defaults = rv_layout::default_expanded(body, &state, BUDGET);
+    // Metrics of the 12 pt monospace font used in the GUI.
+    let metrics = Metrics {
+        char_width: 7.2,
+        line_height: 15.0,
+        max_label_chars: MAX_LABEL_CHARS,
+    };
+    let layout = rv_layout::layout(
+        body,
+        &state,
+        &defaults,
+        Orientation::Vertical,
+        metrics,
+        &analysis.notes,
+    );
+    let wire_list = wires::geometry(body, &analysis.specs, &layout, Orientation::Vertical);
+    Some(diagram_svg(
+        body,
+        &layout,
+        &analysis,
+        &wire_list,
+        WireMode::Auto,
+        None,
+    ))
 }

@@ -81,6 +81,7 @@ items: f -> for it in items
 items: f -> let n = items.len()
 n: let n = items.len() -> sum / n as u32
 sum: for it in items -> sum / n as u32
+sum: if -> sum += it [loop]
 sum: let mut sum = 0 -> sum += it [mut]
 "#,
     );
@@ -130,4 +131,33 @@ name: f -> log::info!("go {speed} {}", name)
 speed: Cmd::Go(speed) if speed > count -> log::info!("go {speed} {}", name)
 "#,
     );
+}
+
+#[test]
+fn shift_registers_are_found() {
+    let p = rv_syn::load_str(
+        r#"
+fn f(rx: Receiver<u32>) {
+    let mut count = 0;
+    let mut last = 0;
+    let limit = 10;
+    loop {
+        let v = rx.recv().unwrap();
+        if v == last { continue; }
+        last = v;
+        count += 1;
+        if count > limit { break; }
+    }
+}"#,
+    );
+    let body = p.functions[0].body.as_ref().unwrap();
+    let flow = rv_analysis::data_flow(body);
+    let mut regs: Vec<&str> = flow
+        .shift_registers
+        .iter()
+        .map(|&(_, b)| flow.bindings[b].name.as_str())
+        .collect();
+    regs.sort();
+    // `limit` is only read, `v` lives inside the loop.
+    assert_eq!(regs, ["count", "last"]);
 }

@@ -15,6 +15,10 @@ by dropping a folder or `.rs` file onto the window. The release binary
 
 - `--threads [graph|communication|functions]` starts with the thread overview.
 - `--callgraph [module]` starts with the module call graph.
+- `--export <dir>` writes SVG and PNG files of the thread graph, the
+  communication matrix and the module graph (plus the `--select`ed function
+  diagram) without opening a window. In the GUI every view has an *Export…*
+  button (the whole diagram, light colors).
 - `--select ec_task::ethercat_task` selects a function after loading
   (full qualified path or any `::`-suffix of it).
 - `--editor` defaults to `code --goto {file}:{line}:{col}`.
@@ -36,7 +40,10 @@ places that use it (hover a wire for the name). Changes (`=`, `+=`, `&mut`,
 `push`, ...) are drawn as orange sequence wires; dashed means "a method call on
 a `mut` variable that may change it" or "guessed from an unexpanded macro".
 A structure that changes a variable is its source afterwards (like a LabVIEW
-output tunnel). In `auto` mode large diagrams only show the wires of the
+output tunnel). Variables carried from one loop iteration to the next are
+shown as shift registers (⟳ in the loop header, terminals on both borders,
+dashed blue loop-back wires); red markers on a structure's border show where
+`return`, `break`, `continue` or `?` leave it. In `auto` mode large diagrams only show the wires of the
 selected or hovered node.
 
 Parallelism: started threads and tasks are recognized by API name

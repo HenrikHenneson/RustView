@@ -8,6 +8,8 @@ mod code_view;
 mod comm_view;
 mod diagram;
 mod editor;
+mod export;
+mod headless;
 mod highlight;
 mod loader;
 mod program_view;
@@ -16,6 +18,7 @@ mod tree;
 mod wires;
 
 pub use editor::{DEFAULT_TEMPLATE as DEFAULT_EDITOR, EditorCommand};
+pub use headless::export_all;
 
 pub struct Options {
     /// Cargo project directory or single `.rs` file; `None` shows the start screen.

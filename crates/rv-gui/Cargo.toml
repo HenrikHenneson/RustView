@@ -19,3 +19,4 @@ syntect.workspace = true
 notify.workspace = true
 notify-debouncer-full.workspace = true
 rfd.workspace = true
+resvg.workspace = true

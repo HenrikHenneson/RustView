@@ -35,6 +35,8 @@ pub enum WireKind {
     Channel,
     /// Between places that use the same shared state from different lanes.
     Shared,
+    /// Value carried into the next loop iteration (shift register).
+    LoopBack,
 }
 
 impl WireKind {
@@ -73,7 +75,7 @@ pub struct Wire {
 const SAMPLES: usize = 20;
 
 impl Wire {
-    fn sample(&self) -> impl Iterator<Item = Pos2> + '_ {
+    pub fn sample(&self) -> impl Iterator<Item = Pos2> + '_ {
         let [p0, p1, p2, p3] = self.points;
         (0..=SAMPLES).map(move |i| {
             let t = i as f32 / SAMPLES as f32;
@@ -240,6 +242,7 @@ pub fn color(name: &str, kind: WireKind, dark: bool) -> Color32 {
         WireKind::PossibleMutation => Some(Color32::from_rgb(230, 140, 30)),
         WireKind::Channel => Some(Color32::from_rgb(0, 150, 165)),
         WireKind::Shared => Some(Color32::from_rgb(150, 90, 210)),
+        WireKind::LoopBack => Some(Color32::from_rgb(70, 130, 220)),
         WireKind::Data => None,
     };
     if let Some(c) = fixed {
@@ -289,7 +292,7 @@ pub fn paint(
     let mut width = match wire.kind {
         WireKind::Data | WireKind::PossibleMutation => 1.4,
         WireKind::Mutation => 1.6,
-        WireKind::Shared => 2.0,
+        WireKind::Shared | WireKind::LoopBack => 2.0,
         WireKind::Channel => 3.0,
     };
     if highlighted {
@@ -298,6 +301,7 @@ pub fn paint(
     let stroke = Stroke::new(width, color);
     match wire.kind {
         WireKind::Shared => painter.extend(Shape::dashed_line(&pts, stroke, 2.0, 4.0)),
+        WireKind::LoopBack => painter.extend(Shape::dashed_line(&pts, stroke, 9.0, 4.0)),
         _ if !wire.certain || wire.kind == WireKind::PossibleMutation => {
             painter.extend(Shape::dashed_line(&pts, stroke, 6.0, 4.0))
         }

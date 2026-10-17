@@ -497,9 +497,13 @@ impl App {
             ui.centered_and_justified(|ui| ui.spinner());
             return;
         };
-        if let CallGraphAction::ShowFn(f) = self.callgraph.ui(ui, project, self.generation) {
-            self.select(f);
-            self.center = CenterTab::Diagram;
+        match self.callgraph.ui(ui, project, self.generation) {
+            CallGraphAction::None => {}
+            CallGraphAction::Message(msg) => self.message = Some((msg, Instant::now())),
+            CallGraphAction::ShowFn(f) => {
+                self.select(f);
+                self.center = CenterTab::Diagram;
+            }
         }
     }
 
@@ -510,6 +514,7 @@ impl App {
         };
         match self.threads.ui(ui, project, self.generation) {
             ThreadsAction::None => {}
+            ThreadsAction::Message(msg) => self.message = Some((msg, Instant::now())),
             ThreadsAction::ShowFn(f) => {
                 self.select(f);
                 self.center = CenterTab::Diagram;
@@ -552,6 +557,7 @@ impl App {
                 self.code
                     .show_span(project, node.span.clone(), node.head.clone());
             }
+            DiagramAction::Message(msg) => self.message = Some((msg, Instant::now())),
             DiagramAction::ShowSpan(span) => {
                 self.code.show_span(project, span.clone(), span);
             }
