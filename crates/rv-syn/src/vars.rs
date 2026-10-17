@@ -3,6 +3,7 @@
 
 use proc_macro2::{TokenStream, TokenTree};
 use rv_ir::{FileId, VarDef};
+use syn::spanned::Spanned;
 
 use crate::source::Parsed;
 
@@ -175,6 +176,7 @@ pub(crate) fn pattern_defs(p: &Parsed, file: FileId, pat: &syn::Pat, out: &mut V
                     name,
                     span: p.span(file, pi.ident.span()),
                     mutable: pi.mutability.is_some(),
+                    ty: None,
                 });
             }
             if let Some((_, sub)) = &pi.subpat {
@@ -195,7 +197,14 @@ pub(crate) fn pattern_defs(p: &Parsed, file: FileId, pat: &syn::Pat, out: &mut V
             }
         }
         syn::Pat::Reference(r) => pattern_defs(p, file, &r.pat, out),
-        syn::Pat::Type(t) => pattern_defs(p, file, &t.pat, out),
+        syn::Pat::Type(t) => {
+            let before = out.len();
+            pattern_defs(p, file, &t.pat, out);
+            let ty = p.text_of(t.ty.span());
+            out[before..]
+                .iter_mut()
+                .for_each(|d| d.ty = Some(ty.clone()));
+        }
         syn::Pat::Paren(pp) => pattern_defs(p, file, &pp.pat, out),
         syn::Pat::Guard(g) => pattern_defs(p, file, &g.pat, out),
         _ => {}
@@ -212,18 +221,50 @@ pub(crate) fn param_defs(p: &Parsed, file: FileId, sig: &syn::Signature) -> Vec<
                 span: p.span(file, r.self_token.span),
                 mutable: r.mutability.is_some()
                     || matches!(r.kind, syn::ReceiverKind::Reference(_, _, Some(_))),
+                ty: None,
             }),
             syn::FnArg::Typed(t) => {
                 let before = out.len();
                 pattern_defs(p, file, &t.pat, &mut out);
                 // `x: &mut T` is a mutable place for our purposes.
-                if matches!(&*t.ty, syn::Type::Reference(r) if r.mutability.is_some()) {
-                    out[before..].iter_mut().for_each(|d| d.mutable = true);
+                let mutable = matches!(&*t.ty, syn::Type::Reference(r) if r.mutability.is_some());
+                let ty = p.text_of(t.ty.span());
+                for d in &mut out[before..] {
+                    d.mutable |= mutable;
+                    d.ty = Some(ty.clone());
                 }
             }
         }
     }
     out
+}
+
+/// Path segments of a path expression or path (`std::thread::spawn`).
+pub(crate) fn segments(path: &syn::Path) -> Vec<String> {
+    path.segments.iter().map(|s| s.ident.to_string()).collect()
+}
+
+/// First string literal in an expression (`"x"`, `"x".to_string()`, `String::from("x")`),
+/// not looking into closures.
+pub(crate) fn first_str_lit(e: &syn::Expr) -> Option<String> {
+    match e {
+        syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(s),
+            ..
+        }) => Some(s.value()),
+        syn::Expr::MethodCall(m) => {
+            first_str_lit(&m.receiver).or_else(|| m.args.iter().find_map(first_str_lit))
+        }
+        syn::Expr::Call(c) => c.args.iter().find_map(first_str_lit),
+        syn::Expr::Reference(r) => first_str_lit(&r.expr),
+        syn::Expr::Paren(p) => first_str_lit(&p.expr),
+        syn::Expr::Macro(m) if m.mac.path.is_ident("format") => {
+            syn::parse2::<syn::LitStr>(m.mac.tokens.clone().into_iter().take(1).collect())
+                .ok()
+                .map(|l| l.value())
+        }
+        _ => None,
+    }
 }
 
 /// Names used as `{name}` (and `{:width$}`) in a format string.

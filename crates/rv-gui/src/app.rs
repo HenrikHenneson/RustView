@@ -9,6 +9,7 @@ use crate::diagram::{DiagramAction, DiagramView};
 use crate::editor::EditorCommand;
 use crate::highlight::Highlighter;
 use crate::loader::Loader;
+use crate::threads::{ThreadsAction, ThreadsView};
 use crate::tree::{TreeAction, TreeView};
 
 const RECENT_KEY: &str = "recent_projects";
@@ -18,6 +19,12 @@ const RELOAD_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE,
 
 const LIMITS_NOTE: &str = "Syntactic analysis only: macros are not expanded, names and types are not resolved, \
      cfg attributes are not evaluated (cfg(test) code is counted, not shown).";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CenterTab {
+    Diagram,
+    Threads,
+}
 
 /// Actions collected while drawing and executed at the end of the frame.
 enum Command {
@@ -41,6 +48,8 @@ pub struct App {
     /// Incremented for every adopted project version (invalidates layouts).
     generation: u64,
     diagram: DiagramView,
+    threads: ThreadsView,
+    center: CenterTab,
     selected: Option<FnId>,
     /// Last selection the tree was expanded to.
     revealed: Option<FnId>,
@@ -71,6 +80,12 @@ impl App {
             load_time: Duration::ZERO,
             generation: 0,
             diagram: DiagramView::default(),
+            threads: ThreadsView::default(),
+            center: if options.threads {
+                CenterTab::Threads
+            } else {
+                CenterTab::Diagram
+            },
             selected: None,
             revealed: None,
             tree: TreeView::default(),
@@ -455,6 +470,44 @@ impl App {
         });
     }
 
+    fn center_panel(&mut self, ui: &mut Ui) {
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.center, CenterTab::Diagram, "Function diagram");
+            ui.selectable_value(&mut self.center, CenterTab::Threads, "Threads")
+                .on_hover_text("All threads and tasks of the project");
+        });
+        ui.separator();
+        match self.center {
+            CenterTab::Diagram => self.diagram_panel(ui),
+            CenterTab::Threads => self.threads_panel(ui),
+        }
+    }
+
+    fn threads_panel(&mut self, ui: &mut Ui) {
+        let Some(project) = &self.project else {
+            ui.centered_and_justified(|ui| ui.spinner());
+            return;
+        };
+        match self.threads.ui(ui, project, self.generation) {
+            ThreadsAction::None => {}
+            ThreadsAction::ShowFn(f) => {
+                self.select(f);
+                self.center = CenterTab::Diagram;
+            }
+            ThreadsAction::ShowNode(f, node) => {
+                self.select(f);
+                if let Some(project) = &self.project {
+                    self.diagram.reveal_node(project, f, node);
+                    if let Some(body) = &project.function(f).body {
+                        let n = body.node(node);
+                        self.code.show_span(project, n.span.clone(), n.head.clone());
+                    }
+                }
+                self.center = CenterTab::Diagram;
+            }
+        }
+    }
+
     fn diagram_panel(&mut self, ui: &mut Ui) {
         let Some(project) = &self.project else {
             ui.centered_and_justified(|ui| ui.spinner());
@@ -574,7 +627,7 @@ impl eframe::App for App {
                 }
             });
 
-        egui::CentralPanel::default().show(ui, |ui| self.diagram_panel(ui));
+        egui::CentralPanel::default().show(ui, |ui| self.center_panel(ui));
 
         let ctx = ui.ctx().clone();
         self.diagnostics_window(&ctx);

@@ -297,6 +297,11 @@ impl Builder {
                     }
                 }
                 syn::Item::Mod(md) => self.module_item(p, file, md, m, ctx, walk),
+                syn::Item::Type(t) => {
+                    self.project
+                        .type_aliases
+                        .insert(t.ident.to_string(), p.text_of(t.ty.span()));
+                }
                 _ => {}
             }
         }

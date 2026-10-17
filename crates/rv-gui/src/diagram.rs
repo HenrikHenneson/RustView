@@ -3,11 +3,11 @@
 use std::collections::{HashMap, HashSet};
 
 use egui::{Color32, CornerRadius, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2, vec2};
-use rv_analysis::{DataFlow, EdgeKind};
+use rv_analysis::{Concurrency, DataFlow, EdgeKind, End, SpawnKind};
 use rv_ir::{Body, FnId, NodeId, NodeKind, Project, StmtKind, StructKind};
 use rv_layout::{ItemKind, Layout, Metrics, Orientation, ViewState};
 
-use crate::wires::{self, WireMode, WireStyle};
+use crate::wires::{self, WireKind, WireMode, WireSpec, WireStyle};
 
 /// Font size of labels at zoom 1.
 const FONT_SIZE: f32 = 12.0;
@@ -51,8 +51,8 @@ pub struct DiagramView {
     pub orientation: Orientation,
     views: HashMap<String, FnView>,
     cached: Option<(LayoutKey, Layout)>,
-    /// Data flow of the shown function, per project generation.
-    flow: Option<((FnId, u64), DataFlow)>,
+    /// Analyses of the shown function, per project generation.
+    analysis: Option<((FnId, u64), Analysis)>,
     pub wire_mode: WireMode,
     /// Wire geometry for the current layout.
     wire_cache: Option<(LayoutKey, Vec<wires::Wire>)>,
@@ -82,9 +82,6 @@ impl DiagramView {
     pub fn reveal_line(&mut self, project: &Project, f: FnId, file: rv_ir::FileId, line: u32) {
         let func = project.function(f);
         let Some(body) = &func.body else { return };
-        let Some(view) = self.views.get_mut(&func.qual_path) else {
-            return;
-        };
         let innermost = body
             .nodes
             .iter()
@@ -96,7 +93,22 @@ impl DiagramView {
             })
             .min_by_key(|(i, n)| (n.span.end.line - n.span.start.line, std::cmp::Reverse(*i)))
             .map(|(i, _)| NodeId(i as u32));
-        let Some(node) = innermost else { return };
+        if let Some(node) = innermost {
+            self.reveal_node(project, f, node);
+        }
+    }
+
+    /// Select `node`, expanding the structures around it and picking its case.
+    pub fn reveal_node(&mut self, project: &Project, f: FnId, node: NodeId) {
+        let func = project.function(f);
+        let Some(body) = &func.body else { return };
+        let view = self
+            .views
+            .entry(func.qual_path.clone())
+            .or_insert_with(|| new_view(body));
+        if view.node_count != body.nodes.len() {
+            *view = new_view(body);
+        }
         // Expand all structures on the way and pick the right case.
         let mut child = node;
         while let Some(parent) = body.node(child).parent {
@@ -154,19 +166,26 @@ impl DiagramView {
             version: view.version,
             char_width_bits: metrics.char_width.to_bits(),
         };
-        if self.cached.as_ref().is_none_or(|(k, _)| *k != key) {
-            let l = rv_layout::layout(body, &view.state, &view.defaults, self.orientation, metrics);
-            self.cached = Some((key, l));
-        }
-        let layout = &self.cached.as_ref().expect("computed above").1;
         if self
-            .flow
+            .analysis
             .as_ref()
             .is_none_or(|(k, _)| *k != (f, generation))
         {
-            self.flow = Some(((f, generation), rv_analysis::data_flow(body)));
+            self.analysis = Some(((f, generation), Analysis::new(body, project)));
         }
-        let flow = &self.flow.as_ref().expect("computed above").1;
+        let analysis = &self.analysis.as_ref().expect("computed above").1;
+        if self.cached.as_ref().is_none_or(|(k, _)| *k != key) {
+            let l = rv_layout::layout(
+                body,
+                &view.state,
+                &view.defaults,
+                self.orientation,
+                metrics,
+                &analysis.notes,
+            );
+            self.cached = Some((key, l));
+        }
+        let layout = &self.cached.as_ref().expect("computed above").1;
 
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         self.canvas = Some(rect);
@@ -274,11 +293,27 @@ impl DiagramView {
                         Stroke::new(width * zoom.max(0.5), color),
                         StrokeKind::Inside,
                     );
+                    if let Some(&lane) = analysis.lane_color.get(&item.node) {
+                        painter.rect_stroke(
+                            r.expand(2.0 * zoom.max(0.5)),
+                            radius,
+                            Stroke::new(3.0, lane),
+                            StrokeKind::Outside,
+                        );
+                    }
                     draw_triangle(&painter, to_screen(s.toggle), s.expanded, style.text);
                     if let Some(p) = &s.prefix {
                         text(p.rect, &p.text, style.weak);
                     }
                     text(s.title.rect, &s.title.text, style.text);
+                    if let Some(n) = &s.note {
+                        let c = analysis
+                            .lane_color
+                            .get(&item.node)
+                            .copied()
+                            .unwrap_or(style.exit);
+                        text(n.rect, &n.text, c);
+                    }
                     if let Some(i) = &s.info {
                         let c = if i.text.contains("exits") {
                             style.exit
@@ -322,7 +357,14 @@ impl DiagramView {
                         text(Rect::from_min_size(pos, Vec2::ZERO), "(empty)", style.weak);
                     }
                 }
-                (ItemKind::Stmt { text: t, badges }, NodeKind::Stmt { kind }) => {
+                (
+                    ItemKind::Stmt {
+                        text: t,
+                        badges,
+                        note,
+                    },
+                    NodeKind::Stmt { kind },
+                ) => {
                     painter.rect_filled(r, radius, style.stmt(kind));
                     painter.rect_stroke(
                         r,
@@ -333,6 +375,15 @@ impl DiagramView {
                     text(t.rect, &t.text, style.text);
                     if let Some(b) = badges {
                         text(b.rect, &b.text, style.exit);
+                    }
+                    if let Some(&lane) = analysis.lane_color.get(&item.node) {
+                        let bar = Rect::from_min_size(r.min, vec2(4.0 * zoom.max(0.5), r.height()));
+                        painter.rect_filled(bar, 0.0, lane);
+                        if let Some(n) = note {
+                            text(n.rect, &n.text, lane);
+                        }
+                    } else if let Some(n) = note {
+                        text(n.rect, &n.text, style.exit);
                     }
                 }
                 _ => {}
@@ -359,27 +410,35 @@ impl DiagramView {
         let mut hovered_wire = None;
         let empty = Vec::new();
         let mut wire_list = &empty;
-        if self.wire_mode != WireMode::Off {
+        if self.wire_mode != WireMode::Off || !analysis.specs.is_empty() {
             let key = self.cached.as_ref().expect("computed above").0.clone();
             if self.wire_cache.as_ref().is_none_or(|(k, _)| *k != key) {
-                let g = wires::geometry(body, flow, layout, self.orientation);
+                let g = wires::geometry(body, &analysis.specs, layout, self.orientation);
                 self.wire_cache = Some((key, g));
             }
             wire_list = &self.wire_cache.as_ref().expect("computed above").1;
+            let specs = &analysis.specs;
             let focus = self.selected.or(hovered.map(|h| h.node));
+            let data_wires = wire_list
+                .iter()
+                .filter(|w| !w.kind.is_concurrency())
+                .count();
             let mode = match self.wire_mode {
-                WireMode::Auto if wire_list.len() <= wires::AUTO_LIMIT => WireMode::All,
+                WireMode::Auto if data_wires <= wires::AUTO_LIMIT => WireMode::All,
                 WireMode::Auto => WireMode::Selected,
                 other => other,
             };
-            let shown = |w: &wires::Wire| match mode {
-                WireMode::All => true,
-                _ => focus.is_some_and(|n| w.touches(n, flow)),
+            let shown = |w: &wires::Wire| {
+                w.kind.is_concurrency()
+                    || match mode {
+                        WireMode::All => true,
+                        WireMode::Off => false,
+                        _ => focus.is_some_and(|n| w.touches(n, specs)),
+                    }
             };
-            if mode == WireMode::Selected && focus.is_none() && !wire_list.is_empty() {
+            if mode == WireMode::Selected && focus.is_none() && data_wires > 0 {
                 let hint = format!(
-                    "{} data wires · select or hover a node to see its wires (wires: all shows everything)",
-                    wire_list.len()
+                    "{data_wires} data wires · select or hover a node to see its wires (wires: all shows everything)"
                 );
                 let galley = painter.layout_no_wrap(hint, FontId::proportional(12.0), style.weak);
                 let pos = rect.left_bottom() + vec2(8.0, -8.0 - galley.size().y);
@@ -396,7 +455,7 @@ impl DiagramView {
                 origin,
             };
             for (i, w) in wire_list.iter().enumerate().filter(|(_, w)| shown(w)) {
-                let related = focus.is_none_or(|n| w.touches(n, flow));
+                let related = w.kind.is_concurrency() || focus.is_none_or(|n| w.touches(n, specs));
                 let alpha = if related || mode == WireMode::Selected {
                     1.0
                 } else {
@@ -408,7 +467,7 @@ impl DiagramView {
 
         if let Some(i) = hovered_wire {
             let w = &wire_list[i];
-            response.on_hover_ui_at_pointer(|ui| wire_tooltip(ui, body, flow, w));
+            response.on_hover_ui_at_pointer(|ui| wire_tooltip(ui, body, analysis, w));
         } else if let Some(item) = hovered {
             response.on_hover_ui_at_pointer(|ui| tooltip(ui, project, body, item.node));
         }
@@ -600,22 +659,173 @@ fn draw_arrow(painter: &egui::Painter, r: Rect, right: bool, color: Color32) {
     painter.add(egui::Shape::convex_polygon(points, color, Stroke::NONE));
 }
 
-fn wire_tooltip(ui: &mut Ui, body: &Body, flow: &DataFlow, w: &wires::Wire) {
-    let e = &flow.edges[w.edge];
-    let what = match e.kind {
-        EdgeKind::Data => "data",
-        EdgeKind::Mutation => "changes it",
-        EdgeKind::PossibleMutation => "may change it (method call on a `mut` variable)",
+fn wire_tooltip(ui: &mut Ui, body: &Body, a: &Analysis, w: &wires::Wire) {
+    let spec = &a.specs[w.spec];
+    let (what, certain) = match spec.kind {
+        WireKind::Channel => {
+            let ch = &a.conc.channels[spec.source];
+            (format!("channel ({})", ch.api), true)
+        }
+        WireKind::Shared => {
+            let g = &a.conc.shared[spec.source];
+            (
+                format!("shared state ({}), used from another lane", g.kind),
+                true,
+            )
+        }
+        _ => {
+            let e = &a.flow.edges[spec.source];
+            let what = match e.kind {
+                EdgeKind::Data => "data",
+                EdgeKind::Mutation => "changes it",
+                EdgeKind::PossibleMutation => "may change it (method call on a `mut` variable)",
+            };
+            (what.to_string(), e.certain)
+        }
     };
     ui.label(egui::RichText::new(&w.name).monospace().strong());
     ui.weak(what);
-    if !e.certain {
+    if !certain {
         ui.weak("guessed from the tokens of an unexpanded macro");
     }
-    for (dir, id) in [("from", e.from), ("to", e.to)] {
+    for (dir, id) in [("from", spec.from), ("to", spec.to)] {
         let n = body.node(id);
         let label: String = n.label.chars().take(70).collect();
         ui.monospace(format!("{dir} line {}: {label}", n.span.start.line));
+    }
+}
+
+/// Analyses of one function and what the diagram derives from them.
+struct Analysis {
+    flow: DataFlow,
+    conc: Concurrency,
+    specs: Vec<WireSpec>,
+    notes: rv_layout::Notes,
+    /// Lane structures and statements that start an inline lane.
+    lane_color: HashMap<NodeId, Color32>,
+}
+
+/// Colors of parallel lanes.
+const LANE_COLORS: [Color32; 6] = [
+    Color32::from_rgb(0, 160, 120),
+    Color32::from_rgb(210, 100, 0),
+    Color32::from_rgb(40, 110, 220),
+    Color32::from_rgb(200, 50, 120),
+    Color32::from_rgb(120, 140, 0),
+    Color32::from_rgb(110, 80, 200),
+];
+
+impl Analysis {
+    fn new(body: &Body, project: &Project) -> Self {
+        let flow = rv_analysis::data_flow(body);
+        let conc = rv_analysis::concurrency(body, &flow, &project.type_aliases);
+        let mut specs: Vec<WireSpec> = flow
+            .edges
+            .iter()
+            .enumerate()
+            .map(|(i, e)| WireSpec {
+                from: e.from,
+                to: e.to,
+                kind: match e.kind {
+                    EdgeKind::Data => WireKind::Data,
+                    EdgeKind::Mutation => WireKind::Mutation,
+                    EdgeKind::PossibleMutation => WireKind::PossibleMutation,
+                },
+                certain: e.certain,
+                name: flow.binding(e).name.clone(),
+                source: i,
+            })
+            .collect();
+
+        // Channels: every send-side place to every receive-side place.
+        for (ci, ch) in conc.channels.iter().enumerate() {
+            let ends = |end: End| {
+                conc.channel_uses
+                    .iter()
+                    .filter(move |u| u.channel == ci && u.end == end)
+            };
+            for s in ends(End::Send) {
+                for r in ends(End::Recv) {
+                    if s.node != r.node {
+                        specs.push(WireSpec {
+                            from: s.node,
+                            to: r.node,
+                            kind: WireKind::Channel,
+                            certain: true,
+                            name: ch.name.clone(),
+                            source: ci,
+                        });
+                    }
+                }
+            }
+        }
+        // Shared state: from where it is created to uses in other lanes and
+        // to the statements that hand it to a new lane.
+        let spawn_nodes: Vec<NodeId> = conc.spawns.iter().map(|s| s.node).collect();
+        for (gi, g) in conc.shared.iter().enumerate() {
+            let home = conc.lane_of(body, g.def);
+            for u in conc.shared_uses.iter().filter(|u| u.group == gi) {
+                if conc.lane_of(body, u.node) != home || spawn_nodes.contains(&u.node) {
+                    specs.push(WireSpec {
+                        from: g.def,
+                        to: u.node,
+                        kind: WireKind::Shared,
+                        certain: true,
+                        name: format!("{} ({})", g.name, g.kind),
+                        source: gi,
+                    });
+                }
+            }
+        }
+
+        // Lane badges and colors.
+        let mut notes: rv_layout::Notes = HashMap::new();
+        let mut lane_color = HashMap::new();
+        let mut next_color = 0;
+        for sp in &conc.spawns {
+            let mut label = match (&sp.name, sp.kind) {
+                (Some(name), _) => format!("‖ {} '{name}'", sp.kind.label()),
+                (None, SpawnKind::BlockOn) => "async on this thread (block_on)".to_string(),
+                (None, kind) => format!("‖ {}", kind.label()),
+            };
+            if sp.in_loop {
+                label.push_str(" ×n");
+            }
+            let color = if sp.kind.is_parallel() {
+                let c = LANE_COLORS[next_color % LANE_COLORS.len()];
+                next_color += 1;
+                Some(c)
+            } else {
+                None
+            };
+            let targets: Vec<NodeId> = if sp.lanes.is_empty() {
+                if let Some(first) = sp.runs.first() {
+                    label.push_str(&format!(" → {first}"));
+                }
+                vec![sp.node]
+            } else {
+                sp.lanes.clone()
+            };
+            for t in targets {
+                notes
+                    .entry(t)
+                    .and_modify(|n: &mut String| {
+                        n.push_str(" · ");
+                        n.push_str(&label);
+                    })
+                    .or_insert_with(|| label.clone());
+                if let Some(c) = color {
+                    lane_color.entry(t).or_insert(c);
+                }
+            }
+        }
+        Analysis {
+            flow,
+            conc,
+            specs,
+            notes,
+            lane_color,
+        }
     }
 }
 

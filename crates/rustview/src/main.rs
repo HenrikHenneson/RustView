@@ -21,6 +21,10 @@ struct Cli {
     /// Select this function after loading, e.g. `ec_task::ethercat_task`.
     #[arg(long)]
     select: Option<String>,
+
+    /// Start with the project-wide overview of threads and tasks.
+    #[arg(long)]
+    threads: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -32,6 +36,7 @@ fn main() -> anyhow::Result<()> {
         path: cli.path,
         editor,
         select: cli.select,
+        threads: cli.threads,
     })
     .map_err(|e| anyhow::anyhow!("{e}"))
 }
