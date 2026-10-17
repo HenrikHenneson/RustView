@@ -2,9 +2,10 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use egui::{Key, KeyboardShortcut, Modifiers, RichText, Ui};
-use rv_ir::{FnId, FnOwner, ParamMode, Project, Severity};
+use rv_ir::{FnId, Project, Severity};
 
 use crate::code_view::{CodeAction, CodeView};
+use crate::diagram::{DiagramAction, DiagramView};
 use crate::editor::EditorCommand;
 use crate::highlight::Highlighter;
 use crate::loader::Loader;
@@ -37,6 +38,9 @@ pub struct App {
     project: Option<Project>,
     load_error: Option<String>,
     load_time: Duration,
+    /// Incremented for every adopted project version (invalidates layouts).
+    generation: u64,
+    diagram: DiagramView,
     selected: Option<FnId>,
     /// Last selection the tree was expanded to.
     revealed: Option<FnId>,
@@ -65,6 +69,8 @@ impl App {
             project: None,
             load_error: None,
             load_time: Duration::ZERO,
+            generation: 0,
+            diagram: DiagramView::default(),
             selected: None,
             revealed: None,
             tree: TreeView::default(),
@@ -91,6 +97,7 @@ impl App {
         self.selected = None;
         self.revealed = None;
         self.tree = TreeView::default();
+        self.diagram.reset();
         self.code.clear();
         self.highlighter.clear();
         self.show_diagnostics = false;
@@ -173,6 +180,7 @@ impl App {
         let cursor = self.code.cursor_line;
 
         self.highlighter.clear();
+        self.generation += 1;
         let is_reload = old.is_some();
         self.selected = match (previous, self.initial_selection.take()) {
             (Some((path, line)), _) => {
@@ -222,6 +230,9 @@ impl App {
 
     fn select(&mut self, f: FnId) {
         let Some(project) = &self.project else { return };
+        if self.selected != Some(f) {
+            self.diagram.function_changed();
+        }
         self.selected = Some(f);
         let func = project.function(f);
         self.code
@@ -444,7 +455,7 @@ impl App {
         });
     }
 
-    fn function_card(&mut self, ui: &mut Ui) {
+    fn diagram_panel(&mut self, ui: &mut Ui) {
         let Some(project) = &self.project else {
             ui.centered_and_justified(|ui| ui.spinner());
             return;
@@ -453,88 +464,26 @@ impl App {
             ui.vertical_centered(|ui| {
                 ui.add_space(ui.available_height() * 0.3);
                 ui.heading("Select a function on the left");
-                ui.weak("Click: show source · Double click: open in editor");
+                ui.weak("Click: show diagram and source · Double click: open in editor");
             });
             return;
         };
-        let func = project.function(f);
-        let mut open = None;
-        egui::ScrollArea::vertical()
-            .id_salt("card_scroll")
-            .show(ui, |ui| {
-                ui.heading(RichText::new(&func.qual_path).monospace());
-                ui.add_space(4.0);
-                ui.label(RichText::new(&func.sig.text).monospace());
-                ui.add_space(8.0);
-
-                egui::Grid::new("fn_facts")
-                    .num_columns(2)
-                    .spacing([16.0, 4.0])
-                    .show(ui, |ui| {
-                        let file = project.file(func.span.file);
-                        ui.weak("location");
-                        let shown = file.path.strip_prefix(&project.root).unwrap_or(&file.path);
-                        let loc = format!("{}:{}", shown.display(), func.name_span.start.line);
-                        if ui.link(loc).on_hover_text("Open in editor").clicked() {
-                            open = Some(f);
-                        }
-                        ui.end_row();
-
-                        ui.weak("kind");
-                        ui.label(match &func.owner {
-                            FnOwner::Free => "free function".to_string(),
-                            FnOwner::Impl { .. } | FnOwner::Trait { .. } => {
-                                format!(
-                                    "method in `{}`",
-                                    func.owner.group_label().unwrap_or_default()
-                                )
-                            }
-                            FnOwner::Nested { parent } => {
-                                format!("nested in `{}`", project.function(*parent).qual_path)
-                            }
-                        });
-                        ui.end_row();
-
-                        ui.weak("size");
-                        ui.label(format!("{} lines", func.span.line_count()));
-                        ui.end_row();
-
-                        if !func.sig.params.is_empty() {
-                            ui.weak("parameters");
-                            ui.vertical(|ui| {
-                                for p in &func.sig.params {
-                                    let mode = match p.mode {
-                                        ParamMode::Value => "",
-                                        ParamMode::Ref => "  (borrowed)",
-                                        ParamMode::RefMut => "  (mutably borrowed)",
-                                    };
-                                    let text = if p.pat == "self" {
-                                        p.ty.clone()
-                                    } else {
-                                        format!("{}: {}", p.pat, p.ty)
-                                    };
-                                    ui.horizontal(|ui| {
-                                        ui.monospace(text);
-                                        ui.weak(mode);
-                                    });
-                                }
-                            });
-                            ui.end_row();
-                        }
-                        if let Some(ret) = &func.sig.ret {
-                            ui.weak("returns");
-                            ui.monospace(ret);
-                            ui.end_row();
-                        }
-                    });
-
-                ui.add_space(16.0);
-                ui.separator();
-                ui.weak("The structure diagram for this function comes with milestone M2.");
-                ui.weak(LIMITS_NOTE);
-            });
-        if let Some(f) = open {
-            self.open_fn_in_editor(f);
+        let action = self.diagram.ui(ui, project, self.generation, f);
+        let Some(body) = &project.function(f).body else {
+            return;
+        };
+        match action {
+            DiagramAction::None => {}
+            DiagramAction::Select(n) => {
+                let node = body.node(n);
+                self.code
+                    .show_span(project, node.span.clone(), node.head.clone());
+            }
+            DiagramAction::Open(n) => {
+                let head = body.node(n).head.clone();
+                let path = project.file(head.file).path.clone();
+                self.open_in_editor(path, head.start.line, head.start.col);
+            }
         }
     }
 
@@ -582,6 +531,7 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         self.poll_loader();
         self.handle_input(ui);
+        fix_tiny_window(ui.ctx());
 
         egui::Panel::top("top_bar").show(ui, |ui| self.top_bar(ui));
         egui::Panel::bottom("status_bar").show(ui, |ui| self.status_bar(ui));
@@ -601,6 +551,7 @@ impl eframe::App for App {
         egui::Panel::left("tree_panel")
             .resizable(true)
             .default_size(340.0)
+            .min_size(180.0)
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 match &self.project {
@@ -615,7 +566,7 @@ impl eframe::App for App {
         egui::Panel::right("code_panel")
             .resizable(true)
             .default_size(760.0)
-            .min_size(240.0)
+            .min_size(300.0)
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 if let Some(p) = &self.project {
@@ -623,7 +574,7 @@ impl eframe::App for App {
                 }
             });
 
-        egui::CentralPanel::default().show(ui, |ui| self.function_card(ui));
+        egui::CentralPanel::default().show(ui, |ui| self.diagram_panel(ui));
 
         let ctx = ui.ctx().clone();
         self.diagnostics_window(&ctx);
@@ -641,11 +592,22 @@ impl eframe::App for App {
                 }
             }
         }
-        if let CodeAction::OpenInEditor { line, col } = code_action
-            && let Some((p, file)) = self.project.as_ref().zip(self.code.file)
-        {
-            let path = p.file(file).path.clone();
-            self.open_in_editor(path, line, col);
+        match code_action {
+            CodeAction::None => {}
+            CodeAction::Clicked { line } => {
+                // Show the innermost statement of the clicked line in the diagram.
+                if let (Some(p), Some(f), Some(file)) =
+                    (&self.project, self.selected, self.code.file)
+                {
+                    self.diagram.reveal_line(p, f, file, line);
+                }
+            }
+            CodeAction::OpenInEditor { line, col } => {
+                if let Some((p, file)) = self.project.as_ref().zip(self.code.file) {
+                    let path = p.file(file).path.clone();
+                    self.open_in_editor(path, line, col);
+                }
+            }
         }
         // Selections made outside the tree (e.g. after a reload) become visible in it.
         if self.selected != self.revealed {
@@ -683,4 +645,19 @@ fn find_function(project: &Project, wanted: &str) -> Option<FnId> {
         .filter(|(_, f)| f.qual_path == wanted || f.qual_path.ends_with(&suffix))
         .min_by_key(|(_, f)| f.qual_path.len())
         .map(|(i, _)| FnId(i as u32))
+}
+
+/// eframe stores a 0x0 window size when the app is closed while minimized and
+/// restores it on the next start. Enlarge such a window once at startup.
+fn fix_tiny_window(ctx: &egui::Context) {
+    const MIN: egui::Vec2 = egui::vec2(640.0, 400.0);
+    if ctx.cumulative_frame_nr() > 2 {
+        return;
+    }
+    let size = ctx.input(|i| i.viewport().inner_rect.map(|r| r.size()));
+    if size.is_some_and(|s| s.x < MIN.x || s.y < MIN.y) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(1600.0, 1000.0)));
+        // Panel widths etc. were saved for the tiny window as well.
+        ctx.data_mut(|d| d.clear());
+    }
 }

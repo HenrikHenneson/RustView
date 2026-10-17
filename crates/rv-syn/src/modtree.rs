@@ -14,7 +14,11 @@ use syn::visit::Visit;
 use crate::cargo::PackageSpec;
 use crate::source::{Parsed, is_skipped_dir, parse, read_lossy};
 
-pub(crate) fn build(root: &Path, specs: &[PackageSpec]) -> Project {
+pub(crate) fn build(
+    root: &Path,
+    specs: &[PackageSpec],
+    in_memory: Option<(PathBuf, String)>,
+) -> Project {
     let mut b = Builder {
         project: Project {
             root: root.to_path_buf(),
@@ -22,6 +26,7 @@ pub(crate) fn build(root: &Path, specs: &[PackageSpec]) -> Project {
         },
         file_ids: HashMap::new(),
         parsed: HashMap::new(),
+        in_memory,
     };
     for spec in specs {
         b.package(spec);
@@ -40,6 +45,8 @@ struct Builder {
     /// Parse results stay cached while building, a file can be part of
     /// several targets (e.g. `mod foo;` from both lib.rs and main.rs).
     parsed: HashMap<FileId, Parsed>,
+    /// Source given as text instead of read from disk (tests, snippets).
+    in_memory: Option<(PathBuf, String)>,
 }
 
 /// Where `mod x;` and `#[path = ...] mod x;` look for files.
@@ -139,7 +146,12 @@ impl Builder {
         if let Some(&id) = self.file_ids.get(path) {
             return Some(id);
         }
-        let text = match read_lossy(path) {
+        let from_memory = self
+            .in_memory
+            .as_ref()
+            .filter(|(p, _)| p == path)
+            .map(|(_, t)| t.clone());
+        let text = match from_memory.map_or_else(|| read_lossy(path), Ok) {
             Ok(t) => t,
             Err(e) => {
                 self.diag(Severity::Error, format!("cannot read: {e}"), Some(path));
@@ -361,6 +373,9 @@ impl Builder {
     ) -> FnId {
         let id = FnId(self.project.functions.len() as u32);
         let name = sig.ident.unraw().to_string();
+        let name_span = p.span(file, sig.ident.span());
+        let body =
+            block.map(|b| crate::body::lower(p, file, &name, b, span.clone(), name_span.clone()));
         let qual_path = match &owner {
             FnOwner::Free => format!("{}::{name}", self.project.module(m).qual_name()),
             FnOwner::Impl { self_ty, .. } => format!(
@@ -382,8 +397,9 @@ impl Builder {
             owner,
             sig: signature(p, sig),
             span,
-            name_span: p.span(file, sig.ident.span()),
+            name_span,
             body_span: block.map(|b| p.span(file, b.span())),
+            body,
         });
         self.project.modules[m.index()].functions.push(id);
         if let Some(block) = block {

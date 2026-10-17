@@ -12,6 +12,7 @@ license = "MIT OR Apache-2.0"
 rv-ir  = { path = "crates/rv-ir" }
 rv-syn = { path = "crates/rv-syn" }
 rv-gui = { path = "crates/rv-gui" }
+rv-layout = { path = "crates/rv-layout" }
 
 anyhow = "1"
 log = "0.4"
@@ -23,6 +24,7 @@ cargo_metadata = "0.23"
 walkdir = "2.5"
 eframe = { version = "0.37", features = ["persistence"] }
 egui = "0.37"
+emath = "0.37"
 syntect = "5.3"
 notify = "8"
 notify-debouncer-full = "0.6"

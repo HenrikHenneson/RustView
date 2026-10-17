@@ -17,8 +17,11 @@ by dropping a folder or `.rs` file onto the window. The release binary
   (full qualified path or any `::`-suffix of it).
 - `--editor` defaults to `code --goto {file}:{line}:{col}`.
 
-Click a function to show its source, double-click (in the tree or the code
-panel) to open the location in the editor. Files are reloaded on change.
+Click a function to show its structure diagram and source. In the diagram,
+click a node to jump to its code, double-click to open it in the editor, use
+the triangle to expand/collapse a structure and ◀ ▶ to switch cases. Clicking a
+line in the code panel selects the matching node in the diagram. Drag to move,
+Ctrl+wheel to zoom. Files are reloaded on change.
 
 ## Crates
 
@@ -26,10 +29,11 @@ panel) to open the location in the editor. Files are reloaded on change.
 |------------|------|
 | `rv-ir`    | backend-independent model (project, modules, functions, spans) |
 | `rv-syn`   | frontend: `cargo metadata` + `syn` → `rv-ir` |
+| `rv-layout`| diagram geometry (nested frames, both orientations), no GUI dependency |
 | `rv-gui`   | egui application |
 | `rustview` | binary / CLI |
 
-`rv-analysis` (def-use, concurrency) and `rv-layout` follow with M2/M3.
+`rv-analysis` (def-use, concurrency) follows with M3/M4.
 
 ## Limits
 

@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 rv-ir.workspace = true
 rv-syn.workspace = true
+rv-layout.workspace = true
 anyhow.workspace = true
 log.workspace = true
 eframe.workspace = true

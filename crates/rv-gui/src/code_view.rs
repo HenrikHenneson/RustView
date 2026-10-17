@@ -26,6 +26,10 @@ pub struct CodeView {
 
 pub enum CodeAction {
     None,
+    /// Single click on a line (1-based).
+    Clicked {
+        line: u32,
+    },
     /// Double click: open in the external editor (line 1-based, col 0-based).
     OpenInEditor {
         line: u32,
@@ -190,6 +194,7 @@ impl CodeView {
 
                 if resp.clicked() {
                     self.cursor_line = Some(line_no);
+                    action = CodeAction::Clicked { line: line_no };
                 }
                 if resp.double_clicked() {
                     let col = resp
