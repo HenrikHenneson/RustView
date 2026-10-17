@@ -13,7 +13,8 @@ also be opened via *File → Open Project Folder…* (Ctrl+O), *File → Recent*
 by dropping a folder or `.rs` file onto the window. The release binary
 (`target/release/rustview.exe`) can be started by double click.
 
-- `--threads` starts with the project-wide thread overview.
+- `--threads [graph|communication|functions]` starts with the thread overview.
+- `--callgraph [module]` starts with the module call graph.
 - `--select ec_task::ethercat_task` selects a function after loading
   (full qualified path or any `::`-suffix of it).
 - `--editor` defaults to `code --goto {file}:{line}:{col}`.
@@ -71,7 +72,11 @@ arguments, return values and struct fields (`App { cmd_tx }` →
 | `rv-gui`   | egui application |
 | `rustview` | binary / CLI |
 
-M5 (optional): call graph view on module level.
+The *Call graph* tab (or `--callgraph [module]`) shows the calls between
+modules of a crate, laid out in layers (callers left, callees right; modules
+that start threads are marked). Grouping depth is selectable. Double-clicking
+a module lists its functions with who calls them and what they call; the
+names lead to the function diagrams.
 
 ## Limits
 

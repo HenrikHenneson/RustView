@@ -6,6 +6,8 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+pub mod layered;
+
 use emath::{Pos2, Rect, Vec2, pos2, vec2};
 use rv_ir::{Body, ExitKind, FrameRole, NodeId, NodeKind};
 
