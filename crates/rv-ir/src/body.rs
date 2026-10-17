@@ -71,9 +71,9 @@ pub struct CallSite {
     pub structures: Vec<NodeId>,
     /// Single-expression closures passed as arguments, as text.
     pub inline_closures: Vec<String>,
-    /// Plain local variables passed as arguments.
-    pub arg_names: Vec<String>,
-    pub arg_count: usize,
+    /// Arguments by position: the local variable if the argument is just a
+    /// variable (`x`, `&x`, `&mut x`, `x.clone()`), otherwise `None`.
+    pub args: Vec<Option<String>>,
     pub span: Span,
 }
 

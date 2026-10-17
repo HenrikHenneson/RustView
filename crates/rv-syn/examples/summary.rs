@@ -100,6 +100,50 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }
+    if std::env::var("PROGRAM").is_ok() {
+        let t0 = std::time::Instant::now();
+        let facts = rv_analysis::Facts::new(&p);
+        let graph = rv_analysis::CallGraph::new(&p);
+        println!(
+            "facts + call graph ({} edges) in {:?}",
+            graph.edges.len(),
+            t0.elapsed()
+        );
+        for entry in rv_analysis::entry_points(&p) {
+            let prog = rv_analysis::program(&p, &facts, &graph, entry);
+            println!(
+                "#### program {} ({} threads)",
+                p.function(entry).qual_path,
+                prog.threads.len()
+            );
+            for (i, t) in prog.threads.iter().enumerate() {
+                let entries: Vec<&str> = t
+                    .entries
+                    .iter()
+                    .take(5)
+                    .map(|&f| p.function(f).name.as_str())
+                    .collect();
+                println!(
+                    "  [{i}] {} spawned_by {:?} entries {:?} ({} fns reached)",
+                    t.title(),
+                    t.spawned_by,
+                    entries,
+                    t.runs.len()
+                );
+            }
+            for l in &prog.links {
+                if let rv_analysis::LinkKind::Channel { name, .. } = &l.kind {
+                    println!("  channel {name}: [{}] -> [{}]", l.from, l.to);
+                }
+            }
+            for r in &prog.resources {
+                println!("  shared {} ({}) users {:?}", r.name, r.kind, r.users);
+            }
+            for (f, _) in &prog.unreached {
+                println!("  unreached spawn in {}", p.function(*f).qual_path);
+            }
+        }
+    }
     for d in &p.diagnostics {
         println!("{:?}: {} {:?}", d.severity, d.message, d.file);
     }

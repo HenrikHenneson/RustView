@@ -8,6 +8,7 @@ mod diagram;
 mod editor;
 mod highlight;
 mod loader;
+mod program_view;
 mod threads;
 mod tree;
 mod wires;

@@ -39,9 +39,17 @@ tokio/smol/async-std `spawn`, `spawn_blocking`, `block_on`, rayon `par_iter`/
 shown as colored lanes; thick teal wires connect the send and receive ends of
 channels (std/crossbeam/tokio/async-channel/flume), dotted purple wires show
 shared state (`Arc<Mutex/RwLock/Atomic…>`, followed through clones and type
-aliases) handed to other lanes. The *Threads* tab (or `--threads`) lists all
-threads of the project, one row per starting function, with links to where
-they start and what they run.
+aliases) handed to other lanes.
+
+The *Threads* tab (or `--threads`) shows the whole program as a graph: starting
+at `main` (choose the binary if there are several) it follows a syntactic call
+graph to find which thread runs which code and where threads are started
+(also from threads, e.g. one thread per connection), how channels connect them
+across function boundaries, and which shared objects several threads use.
+Trait impls of a type whose constructor a thread reaches (e.g. `eframe::App`)
+count as callbacks on that thread. Thread starts that cannot be reached that
+way are listed above the graph. *by function* shows every function that starts
+threads with its lanes.
 
 ## Crates
 
