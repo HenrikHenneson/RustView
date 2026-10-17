@@ -7,6 +7,7 @@ use egui::{Color32, RichText, Stroke, Ui};
 use rv_analysis::{CallGraph, Concurrency, End, Facts, Program};
 use rv_ir::{Body, FnId, NodeId, Project};
 
+use crate::comm_view::CommView;
 use crate::program_view::{GraphLayout, ProgramView};
 
 pub enum ThreadsAction {
@@ -24,6 +25,7 @@ pub struct ThreadsView {
     /// Index into the entry points.
     entry: usize,
     view: ProgramView,
+    comm: CommView,
     /// Fit the graph on the next frame.
     fit: bool,
 }
@@ -32,6 +34,7 @@ pub struct ThreadsView {
 enum Mode {
     #[default]
     Program,
+    Communication,
     ByFunction,
 }
 
@@ -80,15 +83,30 @@ const CHANNEL_COLORS: [Color32; 6] = [
 const CARD_WIDTH: f32 = 280.0;
 
 impl ThreadsView {
+    /// `graph`, `communication` or `functions`.
+    pub fn starting_in(mode: Option<&str>) -> Self {
+        let mode = match mode {
+            Some("communication") => Mode::Communication,
+            Some("functions") => Mode::ByFunction,
+            _ => Mode::Program,
+        };
+        ThreadsView {
+            mode,
+            ..ThreadsView::default()
+        }
+    }
+
     pub fn ui(&mut self, ui: &mut Ui, project: &Project, generation: u64) -> ThreadsAction {
         ui.horizontal(|ui| {
             ui.selectable_value(&mut self.mode, Mode::Program, "program graph")
                 .on_hover_text("Threads from main on, with starts, channels and shared state");
+            ui.selectable_value(&mut self.mode, Mode::Communication, "communication")
+                .on_hover_text("Which thread talks to which: channels, shared state, joins");
             ui.selectable_value(&mut self.mode, Mode::ByFunction, "by function")
                 .on_hover_text("Every function that starts threads, with its lanes");
         });
         match self.mode {
-            Mode::Program => self.program_ui(ui, project, generation),
+            Mode::Program | Mode::Communication => self.program_ui(ui, project, generation),
             Mode::ByFunction => self.by_function_ui(ui, project, generation),
         }
     }
@@ -107,6 +125,7 @@ impl ThreadsView {
                 },
             ));
             self.fit = true;
+            self.comm.selected = None;
         }
         let data = &mut self.program.as_mut().expect("computed above").1;
         if data.entries.is_empty() {
@@ -131,17 +150,20 @@ impl ThreadsView {
                             .clicked()
                         {
                             self.fit = true;
+                            self.comm.selected = None;
                         }
                     }
                 });
-            if ui.button("Fit").clicked() {
-                self.fit = true;
+            if self.mode == Mode::Program {
+                if ui.button("Fit").clicked() {
+                    self.fit = true;
+                }
+                ui.separator();
+                ui.label(RichText::new("━ starts").color(Color32::from_rgb(130, 130, 130)));
+                ui.label(RichText::new("━ channel").color(Color32::from_rgb(0, 150, 165)));
+                ui.label(RichText::new("┅ shared state").color(Color32::from_rgb(150, 90, 210)));
+                ui.weak("· drag: move · Ctrl+wheel: zoom · double click: show code");
             }
-            ui.separator();
-            ui.label(RichText::new("━ starts").color(Color32::from_rgb(130, 130, 130)));
-            ui.label(RichText::new("━ channel").color(Color32::from_rgb(0, 150, 165)));
-            ui.label(RichText::new("┅ shared state").color(Color32::from_rgb(150, 90, 210)));
-            ui.weak("· drag: move · Ctrl+wheel: zoom · double click: show code");
         });
 
         let entry = self.entry;
@@ -172,6 +194,12 @@ impl ThreadsView {
             });
         }
         ui.separator();
+        if self.mode == Mode::Communication {
+            return match self.comm.ui(ui, project, program) {
+                ThreadsAction::None => action,
+                other => other,
+            };
+        }
         if std::mem::take(&mut self.fit) {
             let size = ui.available_size();
             self.view.fit(layout, size);

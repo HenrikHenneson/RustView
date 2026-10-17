@@ -10,5 +10,6 @@ pub use concurrency::{
 };
 pub use dataflow::{Binding, DataFlow, Edge, EdgeKind, data_flow};
 pub use program::{
-    CallGraph, Facts, Link, LinkKind, Program, Resource, Thread, entry_points, program,
+    CallGraph, ChannelComm, Facts, JoinComm, Link, LinkKind, Program, Resource, SharedComm, Site,
+    Thread, entry_points, program,
 };

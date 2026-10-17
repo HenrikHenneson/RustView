@@ -350,6 +350,58 @@ pub struct Program {
     pub resources: Vec<Resource>,
     /// Spawn sites in functions the walk did not reach from the entry.
     pub unreached: Vec<(FnId, NodeId)>,
+    /// How threads communicate, in detail.
+    pub channels: Vec<ChannelComm>,
+    pub shared: Vec<SharedComm>,
+    pub joins: Vec<JoinComm>,
+}
+
+/// A place where a thread uses a channel end, shared object or join handle.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Site {
+    pub thread: usize,
+    pub func: FnId,
+    pub node: NodeId,
+    /// Method applied (`send`, `recv`, `lock`, `load`, `join`, ...); `None`
+    /// if the value is only held or handed on in a way we cannot follow.
+    pub op: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ChannelComm {
+    pub name: String,
+    /// Constructor, e.g. `std::sync::mpsc::sync_channel`.
+    pub api: String,
+    /// Message type if written somewhere (turbofish or parameter types).
+    pub message: Option<String>,
+    /// Capacity argument of bounded channels as written.
+    pub capacity: Option<String>,
+    pub site: (FnId, NodeId),
+    pub senders: Vec<Site>,
+    pub receivers: Vec<Site>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SharedComm {
+    pub name: String,
+    pub kind: String,
+    pub site: (FnId, NodeId),
+    pub users: Vec<Site>,
+}
+
+/// Threads waiting for another thread to finish (`handle.join()`).
+#[derive(Clone, Debug)]
+pub struct JoinComm {
+    /// The thread that is waited for.
+    pub thread: usize,
+    pub waiters: Vec<Site>,
+}
+
+impl SharedComm {
+    /// Threads using the object.
+    pub fn threads(&self) -> BTreeSet<usize> {
+        self.users.iter().map(|s| s.thread).collect()
+    }
 }
 
 /// `main` functions at the root of a target (one per binary).
@@ -595,26 +647,40 @@ impl Walker<'_> {
         }
     }
 
-    /// Threads that use the bindings `start` of `f`, following clones and
-    /// call arguments into parameters.
+    /// Places where the bindings `start` of `f` are used, following clones,
+    /// call arguments into parameters, struct fields into the type's methods
+    /// and return values into callers.
     fn follow(
         &self,
         f: FnId,
         start: &[usize],
         depth: usize,
-        seen: &mut HashSet<(FnId, usize)>,
-    ) -> BTreeSet<usize> {
-        let mut out = BTreeSet::new();
+        seen: &mut Seen,
+        out: &mut Vec<Site>,
+        types: &mut Vec<String>,
+    ) {
         let (Some(body), Some(flow)) = (self.body(f), self.facts.flow(f)) else {
-            return out;
+            return;
         };
         let mut bindings: HashSet<usize> = start
             .iter()
             .copied()
-            .filter(|b| seen.insert((f, *b)))
+            .filter(|b| seen.bindings.insert((f, *b)))
             .collect();
-        if bindings.is_empty() {
-            return out;
+        if bindings.is_empty() || depth > 10 {
+            return;
+        }
+        for &b in &bindings {
+            if flow.bindings[b].def == body.root
+                && let Some(ty) = body
+                    .node(body.root)
+                    .defs
+                    .iter()
+                    .find(|d| d.name == flow.bindings[b].name)
+                    .and_then(|d| d.ty.clone())
+            {
+                types.push(ty);
+            }
         }
         let binding_at = |node: NodeId, name: &str| -> Option<usize> {
             flow.edges
@@ -624,16 +690,24 @@ impl Walker<'_> {
         };
         for (n, node) in body.nodes.iter().enumerate() {
             let id = NodeId(n as u32);
-            let uses_it = node
-                .uses
-                .iter()
-                .any(|u| binding_at(id, &u.name).is_some_and(|b| bindings.contains(&b)));
-            if !uses_it {
+            let ours = |name: &str, bindings: &HashSet<usize>| {
+                binding_at(id, name).is_some_and(|b| bindings.contains(&b))
+            };
+            if !node.uses.iter().any(|u| ours(&u.name, &bindings)) {
                 continue;
             }
-            // `let b = a.clone()` keeps following.
-            if node.defs.len() == 1
-                && node.calls.iter().any(|c| c.name() == "clone")
+            // `let b = a.clone()` / `Arc::clone(&a)` keeps following.
+            let is_clone = node.calls.iter().any(|c| {
+                c.name() == "clone"
+                    && (c.receiver.as_deref().is_some_and(|r| ours(r, &bindings))
+                        || c.args
+                            .first()
+                            .cloned()
+                            .flatten()
+                            .is_some_and(|a| ours(&a, &bindings)))
+            });
+            if is_clone
+                && node.defs.len() == 1
                 && let Some(new) = flow
                     .bindings
                     .iter()
@@ -642,55 +716,201 @@ impl Walker<'_> {
                 bindings.insert(new);
                 continue;
             }
-            let mut passed = false;
+            let mut handled = false;
+            // Methods called on it.
+            for call in &node.calls {
+                if call.receiver.as_deref().is_some_and(|r| ours(r, &bindings))
+                    && call.field.is_none()
+                {
+                    let op = call.path.first().cloned();
+                    if op.as_deref() != Some("clone") {
+                        self.sites(f, id, op, out);
+                        handled = true;
+                    }
+                }
+            }
+            // Handed to a function.
             for (ci, call) in node.calls.iter().enumerate() {
                 let Some(callee) = self.graph.callee(f, id, ci) else {
                     continue;
                 };
                 for (k, arg) in call.args.iter().enumerate() {
-                    let Some(name) = arg else { continue };
-                    if !binding_at(id, name).is_some_and(|b| bindings.contains(&b)) {
-                        continue;
-                    }
-                    if let Some(param) =
-                        param_binding(self.project, self.facts, callee, call.kind, k)
-                        && depth < 8
+                    if arg.as_deref().is_some_and(|a| ours(a, &bindings))
+                        && let Some(param) =
+                            param_binding(self.project, self.facts, callee, call.kind, k)
                     {
-                        out.extend(self.follow(callee, &[param], depth + 1, seen));
-                        passed = true;
+                        self.follow(callee, &[param], depth + 1, seen, out, types);
+                        handled = true;
                     }
                 }
             }
-            if !passed {
-                out.extend(self.threads_at(f, id));
+            // Stored in a struct field: used by the type's methods.
+            for u in &node.uses {
+                if let Some((strukt, field)) = &u.stored_in
+                    && ours(&u.name, &bindings)
+                {
+                    let ty = if strukt == "Self" {
+                        self_type(&self.project.function(f).owner).map(str::to_string)
+                    } else {
+                        Some(strukt.clone())
+                    };
+                    if let Some(ty) = ty {
+                        // The storing thread holds it, the type's methods use it.
+                        self.sites(f, id, Some(format!("stored in {ty}.{field}")), out);
+                        self.follow_field(&ty, field, depth + 1, seen, out, types);
+                        handled = true;
+                    }
+                }
+            }
+            // Returned: continue where the caller binds the result.
+            if is_returned(body, id) {
+                let names: Vec<&str> = node.uses.iter().map(|u| u.name.as_str()).collect();
+                let k = names.iter().position(|nm| ours(nm, &bindings)).unwrap_or(0);
+                for e in self.graph.edges.iter().filter(|e| e.callee == f) {
+                    let (Some(cbody), Some(cflow)) =
+                        (self.body(e.caller), self.facts.flow(e.caller))
+                    else {
+                        continue;
+                    };
+                    let defs = &cbody.node(e.node).defs;
+                    let def = if defs.len() == 1 {
+                        defs.first()
+                    } else {
+                        defs.get(k)
+                    };
+                    if let Some(d) = def
+                        && let Some(b) = cflow
+                            .bindings
+                            .iter()
+                            .rposition(|b| b.def == e.node && b.name == d.name)
+                    {
+                        self.follow(e.caller, &[b], depth + 1, seen, out, types);
+                        handled = true;
+                    }
+                }
+            }
+            if !handled {
+                self.sites(f, id, None, out);
             }
         }
-        out
+    }
+
+    /// Uses of `self.<field>` in the methods of `ty`.
+    fn follow_field(
+        &self,
+        ty: &str,
+        field: &str,
+        depth: usize,
+        seen: &mut Seen,
+        out: &mut Vec<Site>,
+        types: &mut Vec<String>,
+    ) {
+        if !seen.fields.insert((ty.to_string(), field.to_string())) {
+            return;
+        }
+        for (i, m) in self.project.functions.iter().enumerate() {
+            if self_type(&m.owner) != Some(ty) {
+                continue;
+            }
+            let id = FnId(i as u32);
+            let (Some(body), Some(flow)) = (m.body.as_ref(), self.facts.flow(id)) else {
+                continue;
+            };
+            for (n, node) in body.nodes.iter().enumerate() {
+                let nid = NodeId(n as u32);
+                for call in &node.calls {
+                    if call.receiver.as_deref() != Some("self")
+                        || call.field.as_deref() != Some(field)
+                    {
+                        continue;
+                    }
+                    let op = call.path.first().cloned();
+                    if op.as_deref() == Some("clone") {
+                        // `let g = self.field.clone()` (e.g. before spawning).
+                        if node.defs.len() == 1
+                            && let Some(b) = flow
+                                .bindings
+                                .iter()
+                                .rposition(|b| b.def == nid && b.name == node.defs[0].name)
+                        {
+                            self.follow(id, &[b], depth + 1, seen, out, types);
+                        }
+                    } else {
+                        self.sites(id, nid, op, out);
+                    }
+                }
+            }
+        }
+    }
+
+    /// One site per thread executing `node` of `f`.
+    fn sites(&self, f: FnId, node: NodeId, op: Option<String>, out: &mut Vec<Site>) {
+        for thread in self.threads_at(f, node) {
+            let site = Site {
+                thread,
+                func: f,
+                node,
+                op: op.clone(),
+            };
+            if !out.contains(&site) {
+                out.push(site);
+            }
+        }
     }
 
     fn connect(&self, program: &mut Program) {
         for (i, f) in self.project.functions.iter().enumerate() {
             let id = FnId(i as u32);
-            let Some(c) = self.facts.concurrency(id) else {
+            let (Some(c), Some(body)) = (self.facts.concurrency(id), f.body.as_ref()) else {
                 continue;
             };
-            let Some(_) = f.body else { continue };
+            let creators = |node: NodeId| self.threads_at(id, node);
             // Channels created here.
             for ch in &c.channels {
-                let creators = self.threads_at(id, ch.def);
-                if creators.is_empty() {
+                if creators(ch.def).is_empty() {
                     continue; // function not reached from this entry
                 }
-                let mut senders = self.follow(id, &ch.senders, 0, &mut HashSet::new());
-                let mut receivers = self.follow(id, &ch.receivers, 0, &mut HashSet::new());
-                if senders.is_empty() {
-                    senders = creators.clone();
+                let mut types = Vec::new();
+                let mut senders = Vec::new();
+                let mut receivers = Vec::new();
+                self.follow(
+                    id,
+                    &ch.senders,
+                    0,
+                    &mut Seen::default(),
+                    &mut senders,
+                    &mut types,
+                );
+                self.follow(
+                    id,
+                    &ch.receivers,
+                    0,
+                    &mut Seen::default(),
+                    &mut receivers,
+                    &mut types,
+                );
+                for list in [&mut senders, &mut receivers] {
+                    if list.is_empty() {
+                        self.sites(id, ch.def, None, list);
+                    }
                 }
-                if receivers.is_empty() {
-                    receivers = creators.clone();
-                }
-                for &s in &senders {
-                    for &r in &receivers {
+                let ctor = body
+                    .node(ch.def)
+                    .calls
+                    .iter()
+                    .find(|c| ch.api == c.path.join("::"));
+                let message = ctor
+                    .and_then(|c| c.turbofish.clone())
+                    .or_else(|| types.iter().find_map(|t| generic_arg(t)));
+                let capacity = ctor.and_then(|c| {
+                    (matches!(c.name(), "sync_channel" | "bounded" | "channel")
+                        && !c.arg_texts.is_empty())
+                    .then(|| c.arg_texts[0].clone())
+                });
+                let s_threads: BTreeSet<usize> = senders.iter().map(|s| s.thread).collect();
+                let r_threads: BTreeSet<usize> = receivers.iter().map(|s| s.thread).collect();
+                for &s in &s_threads {
+                    for &r in &r_threads {
                         if s != r {
                             program.links.push(Link {
                                 from: s,
@@ -704,30 +924,127 @@ impl Walker<'_> {
                         }
                     }
                 }
+                program.channels.push(ChannelComm {
+                    name: ch.name.clone(),
+                    api: ch.api.clone(),
+                    message,
+                    capacity,
+                    site: (id, ch.def),
+                    senders,
+                    receivers,
+                });
             }
             // Shared state created here (`Arc::new`).
             for g in &c.shared {
-                let body = f.body.as_ref().expect("checked above");
                 let created = body
                     .node(g.def)
                     .calls
                     .iter()
                     .any(|c| c.ends_with(&["Arc", "new"]));
-                if !created || self.threads_at(id, g.def).is_empty() {
+                if !created || creators(g.def).is_empty() {
                     continue;
                 }
-                let users = self.follow(id, &g.bindings, 0, &mut HashSet::new());
-                if users.len() >= 2 {
+                let mut users = Vec::new();
+                self.follow(
+                    id,
+                    &g.bindings,
+                    0,
+                    &mut Seen::default(),
+                    &mut users,
+                    &mut Vec::new(),
+                );
+                let shared = SharedComm {
+                    name: g.name.clone(),
+                    kind: g.kind.clone(),
+                    site: (id, g.def),
+                    users,
+                };
+                let threads = shared.threads();
+                if threads.len() >= 2 {
                     program.resources.push(Resource {
                         name: g.name.clone(),
                         kind: g.kind.clone(),
                         site: (id, g.def),
-                        users: users.into_iter().collect(),
+                        users: threads.into_iter().collect(),
                     });
+                    program.shared.push(shared);
+                }
+            }
+            // Join handles of threads started here.
+            for (si, s) in c.spawns.iter().enumerate() {
+                let Some(&thread) = self.spawn_thread.get(&(id, si)) else {
+                    continue;
+                };
+                let node = body.node(s.node);
+                if node.defs.len() != 1 {
+                    continue;
+                }
+                let Some(flow) = self.facts.flow(id) else {
+                    continue;
+                };
+                let Some(handle) = flow
+                    .bindings
+                    .iter()
+                    .rposition(|b| b.def == s.node && b.name == node.defs[0].name)
+                else {
+                    continue;
+                };
+                let mut sites = Vec::new();
+                self.follow(
+                    id,
+                    &[handle],
+                    0,
+                    &mut Seen::default(),
+                    &mut sites,
+                    &mut Vec::new(),
+                );
+                let waiters: Vec<Site> = sites
+                    .into_iter()
+                    .filter(|s| s.op.as_deref() == Some("join"))
+                    .collect();
+                if !waiters.is_empty() {
+                    program.joins.push(JoinComm { thread, waiters });
                 }
             }
         }
     }
+}
+
+#[derive(Default)]
+struct Seen {
+    bindings: HashSet<(FnId, usize)>,
+    fields: HashSet<(String, String)>,
+}
+
+/// The node hands its value to the caller (`return x`, or the function's tail).
+fn is_returned(body: &Body, node: NodeId) -> bool {
+    let n = body.node(node);
+    if matches!(
+        n.kind,
+        rv_ir::NodeKind::Stmt {
+            kind: rv_ir::StmtKind::Exit(rv_ir::ExitKind::Return)
+        }
+    ) {
+        return true;
+    }
+    n.value
+        && n.parent
+            .is_some_and(|p| body.node(p).parent == Some(body.root))
+}
+
+/// `T` in `Sender<T>`, `Receiver<T>`, `SyncSender<T>`, `mpsc::Receiver<T>`.
+fn generic_arg(ty: &str) -> Option<String> {
+    let ty = ty.trim_start_matches('&').trim_start_matches("mut ").trim();
+    let head = ty.split('<').next()?;
+    let last = head.rsplit("::").next()?;
+    if !matches!(
+        last,
+        "Sender" | "SyncSender" | "Receiver" | "UnboundedSender" | "UnboundedReceiver"
+    ) {
+        return None;
+    }
+    let inner = ty.get(head.len() + 1..ty.len().checked_sub(1)?)?;
+    Some(inner.trim().to_string())
 }
 
 /// Binding of the parameter that receives argument `k` of a call.

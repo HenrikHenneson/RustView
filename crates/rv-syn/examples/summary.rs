@@ -139,6 +139,40 @@ fn main() -> anyhow::Result<()> {
             for r in &prog.resources {
                 println!("  shared {} ({}) users {:?}", r.name, r.kind, r.users);
             }
+            let site = |x: &rv_analysis::Site| {
+                let line = p
+                    .function(x.func)
+                    .body
+                    .as_ref()
+                    .map_or(0, |b| b.node(x.node).span.start.line);
+                format!(
+                    "[{}] {}:{} {}",
+                    x.thread,
+                    p.function(x.func).name,
+                    line,
+                    x.op.clone().unwrap_or_else(|| "-".into())
+                )
+            };
+            for c in &prog.channels {
+                println!(
+                    "  CHANNEL {} msg={:?} cap={:?}",
+                    c.name, c.message, c.capacity
+                );
+                for x in &c.senders {
+                    println!("      send  {}", site(x));
+                }
+                for x in &c.receivers {
+                    println!("      recv  {}", site(x));
+                }
+            }
+            for sh in &prog.shared {
+                let ops: Vec<String> = sh.users.iter().map(&site).collect();
+                println!("  SHARED {} ({}): {}", sh.name, sh.kind, ops.join(" | "));
+            }
+            for j in &prog.joins {
+                let w: Vec<String> = j.waiters.iter().map(&site).collect();
+                println!("  JOIN [{}] waited for by {}", j.thread, w.join(", "));
+            }
             for (f, _) in &prog.unreached {
                 println!("  unreached spawn in {}", p.function(*f).qual_path);
             }

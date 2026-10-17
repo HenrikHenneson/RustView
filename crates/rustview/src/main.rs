@@ -22,9 +22,10 @@ struct Cli {
     #[arg(long)]
     select: Option<String>,
 
-    /// Start with the project-wide overview of threads and tasks.
-    #[arg(long)]
-    threads: bool,
+    /// Start with the project-wide overview of threads and tasks:
+    /// `graph` (default), `communication` or `functions`.
+    #[arg(long, num_args = 0..=1, default_missing_value = "graph", value_name = "VIEW")]
+    threads: Option<String>,
 }
 
 fn main() -> anyhow::Result<()> {

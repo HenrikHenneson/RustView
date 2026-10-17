@@ -51,6 +51,15 @@ count as callbacks on that thread. Thread starts that cannot be reached that
 way are listed above the graph. *by function* shows every function that starts
 threads with its lanes.
 
+*communication* (or `--threads communication`) shows how the threads talk to
+each other: a thread × thread matrix (row → column: channel the row sends on,
+shared state the row changes, join the column waits on) and the details of a
+selected object — message type, capacity, and every send/receive/lock/load/...
+site with what it means (blocks, polls, drops when full) and a link to the
+code. Channel ends and shared objects are followed through clones, call
+arguments, return values and struct fields (`App { cmd_tx }` →
+`self.cmd_tx.send(..)` in `App`'s methods).
+
 ## Crates
 
 | crate      | role |
