@@ -10,11 +10,13 @@ use std::ops::Range;
 
 use rv_ir::{
     Body, Exit, ExitKind, FileId, FrameRole, Node, NodeId, NodeKind, Span, StmtKind, StructKind,
+    UseMode, VarDef, VarUse,
 };
 use syn::spanned::Spanned;
 use syn::visit::Visit;
 
 use crate::source::{Parsed, collapse_ws};
+use crate::vars;
 
 /// Longest label kept in the IR; the view may shorten further.
 const MAX_LABEL: usize = 160;
@@ -22,7 +24,7 @@ const MAX_LABEL: usize = 160;
 pub(crate) fn lower(
     p: &Parsed,
     file: FileId,
-    name: &str,
+    sig: &syn::Signature,
     block: &syn::Block,
     fn_span: Span,
     name_span: Span,
@@ -42,8 +44,9 @@ pub(crate) fn lower(
         },
         fn_span,
         name_span,
-        name.to_string(),
+        syn::ext::IdentExt::unraw(&sig.ident).to_string(),
     );
+    l.nodes[root.index()].defs = vars::param_defs(p, file, sig);
     l.scopes.push(Scope::FnLike(root));
     let block_span = l.span(block.span());
     let frame = l.add(
@@ -133,6 +136,8 @@ impl<'a> Lower<'a> {
             label,
             value: false,
             tries: 0,
+            defs: Vec::new(),
+            uses: Vec::new(),
         });
         if let Some(p) = parent {
             self.nodes[p.index()].children.push(id);
@@ -161,6 +166,8 @@ impl<'a> Lower<'a> {
                         span,
                         String::new(),
                     );
+                    let mut v = Embed::new(self, id, id, Container::Node(id));
+                    v.macro_uses(&m.mac);
                     self.finish_label(id);
                     self.nodes[id.index()].value = last && m.semi_token.is_none();
                 }
@@ -171,11 +178,14 @@ impl<'a> Lower<'a> {
 
     fn local(&mut self, frame: NodeId, local: &syn::Local) {
         let prefix = format!("let {} =", self.p.text_of(local.pat.span()));
+        let mut defs = Vec::new();
+        vars::pattern_defs(self.p, self.file, &local.pat, &mut defs);
         if let Some(init) = &local.init
             && init.diverge.is_none()
             && is_structure(&init.expr)
         {
-            self.structure(frame, &init.expr, Some(prefix));
+            let id = self.structure(frame, &init.expr, Some(prefix));
+            self.nodes[id.index()].defs = defs;
             return;
         }
         let span = self.span(local.span());
@@ -216,6 +226,7 @@ impl<'a> Lower<'a> {
                 self.body_expr_into(f, else_expr);
             }
         }
+        self.nodes[id.index()].defs = defs;
         self.finish_label(id);
     }
 
@@ -228,7 +239,10 @@ impl<'a> Lower<'a> {
             match e {
                 syn::Expr::Assign(a) if is_structure(&a.right) => {
                     let prefix = format!("{} =", self.p.text_of(a.left.span()));
-                    self.structure(frame, &a.right, Some(prefix))
+                    let id = self.structure(frame, &a.right, Some(prefix));
+                    let mut v = Embed::new(self, id, id, Container::Node(id));
+                    v.target(&a.left, UseMode::Assign);
+                    id
                 }
                 syn::Expr::Return(_) | syn::Expr::Break(_) | syn::Expr::Continue(_) => {
                     let kind = self.exit_kind(e);
@@ -327,7 +341,8 @@ impl<'a> Lower<'a> {
                         f_head,
                         pattern,
                     );
-                    self.embed(id, Container::Node(f), &cur.cond);
+                    let defs = self.embed_with(id, f, Container::Node(f), &cur.cond);
+                    self.nodes[f.index()].defs = defs;
                     self.block_into(f, &cur.then_branch);
                     let Some((else_token, else_expr)) = &cur.else_branch else {
                         break;
@@ -374,9 +389,12 @@ impl<'a> Lower<'a> {
                         guard: guard_text,
                     };
                     let f = self.add(Some(id), frame(role), f_span, f_head, label);
+                    let mut defs = Vec::new();
+                    vars::pattern_defs(self.p, self.file, pat, &mut defs);
                     if let Some(g) = guard {
-                        self.embed(id, Container::Node(f), g);
+                        defs.extend(self.embed_with(id, f, Container::Node(f), g));
                     }
+                    self.nodes[f.index()].defs = defs;
                     self.body_expr_into(f, &arm.body);
                 }
                 id
@@ -393,7 +411,7 @@ impl<'a> Lower<'a> {
                     head,
                     text,
                 );
-                self.loop_body(id, label, &l.body);
+                self.loop_body(id, label, &l.body, Vec::new());
                 id
             }
             syn::Expr::While(w) => {
@@ -408,8 +426,8 @@ impl<'a> Lower<'a> {
                     head,
                     text,
                 );
-                self.embed(id, Container::CondFrame(id), &w.cond);
-                self.loop_body(id, label, &w.body);
+                let defs = self.embed_with(id, id, Container::CondFrame(id), &w.cond);
+                self.loop_body(id, label, &w.body, defs);
                 id
             }
             syn::Expr::ForLoop(f) => {
@@ -425,7 +443,9 @@ impl<'a> Lower<'a> {
                     text,
                 );
                 self.embed(id, Container::CondFrame(id), &f.expr);
-                self.loop_body(id, label, &f.body);
+                let mut defs = Vec::new();
+                vars::pattern_defs(self.p, self.file, &f.pat, &mut defs);
+                self.loop_body(id, label, &f.body, defs);
                 id
             }
             syn::Expr::Block(b) => {
@@ -445,7 +465,7 @@ impl<'a> Lower<'a> {
                 if let Some(label) = label {
                     self.scopes.push(Scope::Block { node: id, label });
                 }
-                self.body_frame(id, &b.block);
+                let _ = self.body_frame(id, &b.block);
                 if b.label.is_some() {
                     self.scopes.pop();
                 }
@@ -454,7 +474,7 @@ impl<'a> Lower<'a> {
             syn::Expr::Unsafe(u) => {
                 let head = self.span(u.unsafe_token.span());
                 let id = new(self, StructKind::Unsafe, head, "unsafe".into());
-                self.body_frame(id, &u.block);
+                let _ = self.body_frame(id, &u.block);
                 id
             }
             syn::Expr::Const(c) => {
@@ -465,14 +485,14 @@ impl<'a> Lower<'a> {
                     head,
                     "const".into(),
                 );
-                self.body_frame(id, &c.block);
+                let _ = self.body_frame(id, &c.block);
                 id
             }
             syn::Expr::TryBlock(t) => {
                 let head = self.span(t.try_token.span());
                 let id = new(self, StructKind::Block { label: None }, head, "try".into());
                 self.scopes.push(Scope::FnLike(id));
-                self.body_frame(id, &t.block);
+                let _ = self.body_frame(id, &t.block);
                 self.scopes.pop();
                 id
             }
@@ -484,7 +504,7 @@ impl<'a> Lower<'a> {
                 };
                 let id = new(self, kind, head, text);
                 self.scopes.push(Scope::FnLike(id));
-                self.body_frame(id, &a.block);
+                let _ = self.body_frame(id, &a.block);
                 self.scopes.pop();
                 id
             }
@@ -505,6 +525,11 @@ impl<'a> Lower<'a> {
                     body_span,
                     String::new(),
                 );
+                let mut defs = Vec::new();
+                for input in &c.inputs {
+                    vars::pattern_defs(self.p, self.file, input, &mut defs);
+                }
+                self.nodes[f.index()].defs = defs;
                 self.body_expr_into(f, &c.body);
                 self.scopes.pop();
                 id
@@ -525,13 +550,20 @@ impl<'a> Lower<'a> {
         }
     }
 
-    fn loop_body(&mut self, id: NodeId, label: Option<String>, body: &syn::Block) {
+    fn loop_body(
+        &mut self,
+        id: NodeId,
+        label: Option<String>,
+        body: &syn::Block,
+        defs: Vec<VarDef>,
+    ) {
         self.scopes.push(Scope::Loop { node: id, label });
-        self.body_frame(id, body);
+        let f = self.body_frame(id, body);
+        self.nodes[f.index()].defs = defs;
         self.scopes.pop();
     }
 
-    fn body_frame(&mut self, structure: NodeId, block: &syn::Block) {
+    fn body_frame(&mut self, structure: NodeId, block: &syn::Block) -> NodeId {
         let span = self.span(block.span());
         let f = self.add(
             Some(structure),
@@ -541,16 +573,26 @@ impl<'a> Lower<'a> {
             String::new(),
         );
         self.block_into(f, block);
+        f
     }
 
-    /// Structures and exits inside an expression. Exits are attributed to `owner`.
+    /// Structures, exits and variable uses inside an expression.
     fn embed(&mut self, owner: NodeId, container: Container, e: &syn::Expr) {
-        let mut v = Embed {
-            lower: self,
-            owner,
-            container,
-        };
+        self.embed_with(owner, owner, container, e);
+    }
+
+    /// Exits are attributed to `owner`, variable uses to `use_owner`.
+    /// Returns bindings of `let` expressions (`if let`, `while let`).
+    fn embed_with(
+        &mut self,
+        owner: NodeId,
+        use_owner: NodeId,
+        container: Container,
+        e: &syn::Expr,
+    ) -> Vec<VarDef> {
+        let mut v = Embed::new(self, owner, use_owner, container);
         v.visit_expr(e);
+        v.defs
     }
 
     fn container_node(&mut self, container: &mut Container) -> NodeId {
@@ -666,11 +708,114 @@ fn frame_kind_body() -> NodeKind {
     frame(FrameRole::Body)
 }
 
-/// Finds structures and exits inside a statement's expression.
+/// Finds structures, exits and variable uses inside an expression.
 struct Embed<'l, 'a> {
     lower: &'l mut Lower<'a>,
+    /// Gets exits and `?` counts.
     owner: NodeId,
+    /// Gets variable uses.
+    use_owner: NodeId,
     container: Container,
+    /// Bindings of `let` expressions.
+    defs: Vec<VarDef>,
+    /// Parameters of enclosing inline closures (not outer variables).
+    shadow: Vec<Vec<String>>,
+    /// Inside an inline closure: `return`/`?` leave the closure, not us.
+    in_closure: u32,
+}
+
+impl<'l, 'a> Embed<'l, 'a> {
+    fn new(
+        lower: &'l mut Lower<'a>,
+        owner: NodeId,
+        use_owner: NodeId,
+        container: Container,
+    ) -> Self {
+        Embed {
+            lower,
+            owner,
+            use_owner,
+            container,
+            defs: Vec::new(),
+            shadow: Vec::new(),
+            in_closure: 0,
+        }
+    }
+
+    fn use_name(&mut self, name: String, span: proc_macro2::Span, mode: UseMode, certain: bool) {
+        if self.shadow.iter().any(|s| s.contains(&name)) {
+            return;
+        }
+        let span = self.lower.span(span);
+        self.lower.nodes[self.use_owner.index()].uses.push(VarUse {
+            name,
+            span,
+            mode,
+            certain,
+        });
+    }
+
+    /// The place written by an assignment, `&mut` or method call:
+    /// `x`, `x.field`, `x[i]`, `*x`.
+    fn target(&mut self, e: &syn::Expr, mode: UseMode) {
+        match unwrap(e) {
+            syn::Expr::Path(p) => {
+                if let Some(name) = vars::local_name(p) {
+                    self.use_name(name, p.span(), mode, true);
+                }
+            }
+            syn::Expr::Field(f) => self.target(&f.base, mode),
+            syn::Expr::Index(i) => {
+                self.visit_expr(&i.index);
+                self.target(&i.expr, mode);
+            }
+            syn::Expr::Unary(u) if matches!(u.op, syn::UnOp::Deref(_)) => {
+                self.target(&u.expr, mode)
+            }
+            other => self.visit_expr(other),
+        }
+    }
+
+    fn macro_uses(&mut self, mac: &syn::Macro) {
+        use syn::parse::Parser;
+        if vars::is_known_macro(&mac.path) {
+            let parsed = syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated
+                .parse2(mac.tokens.clone())
+                .map(|args| args.into_iter().collect::<Vec<_>>())
+                .or_else(|_| {
+                    // `vec![x; n]`
+                    (|input: syn::parse::ParseStream| {
+                        let a: syn::Expr = input.parse()?;
+                        let _: syn::Token![;] = input.parse()?;
+                        let b: syn::Expr = input.parse()?;
+                        Ok(vec![a, b])
+                    })
+                    .parse2(mac.tokens.clone())
+                });
+            if let Ok(args) = parsed {
+                for arg in &args {
+                    match arg {
+                        syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(s),
+                            ..
+                        }) => {
+                            for name in vars::format_arg_names(&s.value()) {
+                                self.use_name(name, s.span(), UseMode::Read, true);
+                            }
+                        }
+                        other => self.visit_expr(other),
+                    }
+                }
+                return;
+            }
+        }
+        // Not understood: every local-looking name might be a use.
+        let mut names = Vec::new();
+        vars::token_names(mac.tokens.clone(), &mut names);
+        for (name, span) in names {
+            self.use_name(name, span, UseMode::Read, false);
+        }
+    }
 }
 
 impl<'ast> Visit<'ast> for Embed<'_, '_> {
@@ -681,13 +826,61 @@ impl<'ast> Visit<'ast> for Embed<'_, '_> {
             return;
         }
         match e {
-            // An expression closure has its own `return`/`?` scope and no
-            // structure worth a frame.
-            syn::Expr::Closure(_) | syn::Expr::Macro(_) => return,
+            syn::Expr::Closure(c) => {
+                let mut params = Vec::new();
+                for input in &c.inputs {
+                    vars::pattern_defs(self.lower.p, self.lower.file, input, &mut params);
+                }
+                self.shadow
+                    .push(params.into_iter().map(|d| d.name).collect());
+                self.in_closure += 1;
+                self.visit_expr(&c.body);
+                self.in_closure -= 1;
+                self.shadow.pop();
+                return;
+            }
+            syn::Expr::Macro(m) => {
+                self.macro_uses(&m.mac);
+                return;
+            }
+            syn::Expr::Path(p) => {
+                if let Some(name) = vars::local_name(p) {
+                    self.use_name(name, p.span(), UseMode::Read, true);
+                }
+                return;
+            }
+            syn::Expr::Assign(a) => {
+                self.target(&a.left, UseMode::Assign);
+                self.visit_expr(&a.right);
+                return;
+            }
+            syn::Expr::Binary(b) if is_assign_op(&b.op) => {
+                self.target(&b.left, UseMode::CompoundAssign);
+                self.visit_expr(&b.right);
+                return;
+            }
+            syn::Expr::Reference(r) if r.mutability.is_some() => {
+                self.target(&r.expr, UseMode::RefMut);
+                return;
+            }
+            syn::Expr::MethodCall(m) => {
+                self.target(&m.receiver, vars::receiver_mode(&m.method.to_string()));
+                for arg in &m.args {
+                    self.visit_expr(arg);
+                }
+                return;
+            }
+            syn::Expr::Let(l) => {
+                self.visit_expr(&l.expr);
+                vars::pattern_defs(self.lower.p, self.lower.file, &l.pat, &mut self.defs);
+                return;
+            }
             syn::Expr::Try(_)
             | syn::Expr::Return(_)
             | syn::Expr::Break(_)
-            | syn::Expr::Continue(_) => {
+            | syn::Expr::Continue(_)
+                if self.in_closure == 0 =>
+            {
                 let kind = self.lower.exit_kind(e);
                 self.lower.exit(kind, self.owner);
             }

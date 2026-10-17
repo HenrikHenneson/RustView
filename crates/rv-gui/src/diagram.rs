@@ -3,8 +3,11 @@
 use std::collections::{HashMap, HashSet};
 
 use egui::{Color32, CornerRadius, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2, vec2};
+use rv_analysis::{DataFlow, EdgeKind};
 use rv_ir::{Body, FnId, NodeId, NodeKind, Project, StmtKind, StructKind};
 use rv_layout::{ItemKind, Layout, Metrics, Orientation, ViewState};
+
+use crate::wires::{self, WireMode, WireStyle};
 
 /// Font size of labels at zoom 1.
 const FONT_SIZE: f32 = 12.0;
@@ -48,6 +51,11 @@ pub struct DiagramView {
     pub orientation: Orientation,
     views: HashMap<String, FnView>,
     cached: Option<(LayoutKey, Layout)>,
+    /// Data flow of the shown function, per project generation.
+    flow: Option<((FnId, u64), DataFlow)>,
+    pub wire_mode: WireMode,
+    /// Wire geometry for the current layout.
+    wire_cache: Option<(LayoutKey, Vec<wires::Wire>)>,
     pub selected: Option<NodeId>,
     /// Center this node on the next frame.
     scroll_to: Option<NodeId>,
@@ -60,6 +68,7 @@ impl DiagramView {
     pub fn reset(&mut self) {
         *self = DiagramView {
             orientation: self.orientation,
+            wire_mode: self.wire_mode,
             ..DiagramView::default()
         };
     }
@@ -150,6 +159,14 @@ impl DiagramView {
             self.cached = Some((key, l));
         }
         let layout = &self.cached.as_ref().expect("computed above").1;
+        if self
+            .flow
+            .as_ref()
+            .is_none_or(|(k, _)| *k != (f, generation))
+        {
+            self.flow = Some(((f, generation), rv_analysis::data_flow(body)));
+        }
+        let flow = &self.flow.as_ref().expect("computed above").1;
 
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         self.canvas = Some(rect);
@@ -338,7 +355,61 @@ impl DiagramView {
             }
         }
 
-        if let Some(item) = hovered {
+        // Wires on top of the boxes.
+        let mut hovered_wire = None;
+        let empty = Vec::new();
+        let mut wire_list = &empty;
+        if self.wire_mode != WireMode::Off {
+            let key = self.cached.as_ref().expect("computed above").0.clone();
+            if self.wire_cache.as_ref().is_none_or(|(k, _)| *k != key) {
+                let g = wires::geometry(body, flow, layout, self.orientation);
+                self.wire_cache = Some((key, g));
+            }
+            wire_list = &self.wire_cache.as_ref().expect("computed above").1;
+            let focus = self.selected.or(hovered.map(|h| h.node));
+            let mode = match self.wire_mode {
+                WireMode::Auto if wire_list.len() <= wires::AUTO_LIMIT => WireMode::All,
+                WireMode::Auto => WireMode::Selected,
+                other => other,
+            };
+            let shown = |w: &wires::Wire| match mode {
+                WireMode::All => true,
+                _ => focus.is_some_and(|n| w.touches(n, flow)),
+            };
+            if mode == WireMode::Selected && focus.is_none() && !wire_list.is_empty() {
+                let hint = format!(
+                    "{} data wires · select or hover a node to see its wires (wires: all shows everything)",
+                    wire_list.len()
+                );
+                let galley = painter.layout_no_wrap(hint, FontId::proportional(12.0), style.weak);
+                let pos = rect.left_bottom() + vec2(8.0, -8.0 - galley.size().y);
+                let bg = Rect::from_min_size(pos, galley.size()).expand(4.0);
+                painter.rect_filled(bg, 4.0, ui.visuals().extreme_bg_color);
+                painter.galley(pos, galley, style.weak);
+            }
+            hovered_wire = response
+                .hover_pos()
+                .and_then(|p| wires::hit(wire_list, shown, to_world(p), 5.0 / zoom));
+            let wstyle = WireStyle {
+                dark: ui.visuals().dark_mode,
+                zoom,
+                origin,
+            };
+            for (i, w) in wire_list.iter().enumerate().filter(|(_, w)| shown(w)) {
+                let related = focus.is_none_or(|n| w.touches(n, flow));
+                let alpha = if related || mode == WireMode::Selected {
+                    1.0
+                } else {
+                    0.18
+                };
+                wires::paint(&painter, w, &wstyle, alpha, hovered_wire == Some(i), rect);
+            }
+        }
+
+        if let Some(i) = hovered_wire {
+            let w = &wire_list[i];
+            response.on_hover_ui_at_pointer(|ui| wire_tooltip(ui, body, flow, w));
+        } else if let Some(item) = hovered {
             response.on_hover_ui_at_pointer(|ui| tooltip(ui, project, body, item.node));
         }
         action
@@ -357,6 +428,18 @@ impl DiagramView {
                 "→ left-right",
             )
             .on_hover_text("Statements left to right, cases stacked");
+            ui.separator();
+            ui.label("wires:");
+            ui.selectable_value(&mut self.wire_mode, WireMode::Auto, "auto")
+                .on_hover_text(format!(
+                    "All wires up to {}, otherwise only those of the selected node",
+                    wires::AUTO_LIMIT
+                ));
+            ui.selectable_value(&mut self.wire_mode, WireMode::All, "all")
+                .on_hover_text("All data wires; those of the selected node stand out");
+            ui.selectable_value(&mut self.wire_mode, WireMode::Selected, "selected")
+                .on_hover_text("Only wires of the selected or hovered node");
+            ui.selectable_value(&mut self.wire_mode, WireMode::Off, "off");
             ui.separator();
             if ui.button("Expand all").clicked() {
                 for (i, n) in body.nodes.iter().enumerate() {
@@ -515,6 +598,25 @@ fn draw_arrow(painter: &egui::Painter, r: Rect, right: bool, color: Color32) {
         c + vec2(s * 0.8 * d, 0.0),
     ];
     painter.add(egui::Shape::convex_polygon(points, color, Stroke::NONE));
+}
+
+fn wire_tooltip(ui: &mut Ui, body: &Body, flow: &DataFlow, w: &wires::Wire) {
+    let e = &flow.edges[w.edge];
+    let what = match e.kind {
+        EdgeKind::Data => "data",
+        EdgeKind::Mutation => "changes it",
+        EdgeKind::PossibleMutation => "may change it (method call on a `mut` variable)",
+    };
+    ui.label(egui::RichText::new(&w.name).monospace().strong());
+    ui.weak(what);
+    if !e.certain {
+        ui.weak("guessed from the tokens of an unexpanded macro");
+    }
+    for (dir, id) in [("from", e.from), ("to", e.to)] {
+        let n = body.node(id);
+        let label: String = n.label.chars().take(70).collect();
+        ui.monospace(format!("{dir} line {}: {label}", n.span.start.line));
+    }
 }
 
 fn tooltip(ui: &mut Ui, project: &Project, body: &Body, id: NodeId) {

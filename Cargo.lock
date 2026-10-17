@@ -3318,6 +3318,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rv-analysis"
+version = "0.1.0"
+dependencies = [
+ "rv-ir",
+ "rv-syn",
+]
+
+[[package]]
 name = "rv-gui"
 version = "0.1.0"
 dependencies = [
@@ -3328,6 +3336,7 @@ dependencies = [
  "notify",
  "notify-debouncer-full",
  "rfd",
+ "rv-analysis",
  "rv-ir",
  "rv-layout",
  "rv-syn",

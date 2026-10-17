@@ -10,6 +10,7 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 rv-ir  = { path = "crates/rv-ir" }
+rv-analysis = { path = "crates/rv-analysis" }
 rv-syn = { path = "crates/rv-syn" }
 rv-gui = { path = "crates/rv-gui" }
 rv-layout = { path = "crates/rv-layout" }
