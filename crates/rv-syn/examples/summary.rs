@@ -55,6 +55,51 @@ fn main() -> anyhow::Result<()> {
     {
         print!("{}", f.body.as_ref().unwrap().dump());
     }
+    if std::env::var("THREADS").is_ok() {
+        for f in &p.functions {
+            let Some(body) = &f.body else { continue };
+            let flow = rv_analysis::data_flow(body);
+            let c = rv_analysis::concurrency(body, &flow, &p.type_aliases);
+            if c.is_empty() {
+                continue;
+            }
+            println!("== {} (line {})", f.qual_path, f.span.start.line);
+            for s in &c.spawns {
+                let many = if s.in_loop { " ×n" } else { "" };
+                println!(
+                    "   {}{many} {:?} via {}: runs {:?}",
+                    s.kind.label(),
+                    s.name,
+                    s.api,
+                    s.runs.iter().take(3).collect::<Vec<_>>()
+                );
+            }
+            for ch in &c.channels {
+                println!("   channel {} ({})", ch.name, ch.api);
+            }
+            for u in &c.channel_uses {
+                println!(
+                    "     {:?} {:?} at line {}",
+                    u.end,
+                    u.op,
+                    body.node(u.node).span.start.line
+                );
+            }
+            for g in &c.shared {
+                let n = c
+                    .shared_uses
+                    .iter()
+                    .filter(|u| c.shared[u.group].name == g.name)
+                    .count();
+                println!(
+                    "   shared {} ({}) {} bindings, {n} uses",
+                    g.name,
+                    g.kind,
+                    g.bindings.len()
+                );
+            }
+        }
+    }
     for d in &p.diagnostics {
         println!("{:?}: {} {:?}", d.severity, d.message, d.file);
     }

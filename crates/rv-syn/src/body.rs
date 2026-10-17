@@ -9,8 +9,8 @@
 use std::ops::Range;
 
 use rv_ir::{
-    Body, Exit, ExitKind, FileId, FrameRole, Node, NodeId, NodeKind, Span, StmtKind, StructKind,
-    UseMode, VarDef, VarUse,
+    Body, CallKind, CallSite, Exit, ExitKind, FileId, FrameRole, Node, NodeId, NodeKind, Span,
+    StmtKind, StructKind, UseMode, VarDef, VarUse,
 };
 use syn::spanned::Spanned;
 use syn::visit::Visit;
@@ -138,6 +138,7 @@ impl<'a> Lower<'a> {
             tries: 0,
             defs: Vec::new(),
             uses: Vec::new(),
+            calls: Vec::new(),
         });
         if let Some(p) = parent {
             self.nodes[p.index()].children.push(id);
@@ -776,8 +777,63 @@ impl<'l, 'a> Embed<'l, 'a> {
         }
     }
 
+    /// Visit call arguments; closures with block bodies become structures and are
+    /// remembered for the call site.
+    fn call_args<'e>(&mut self, args: impl Iterator<Item = &'e syn::Expr>, call: &mut CallSite) {
+        for arg in args {
+            call.arg_count += 1;
+            let arg = unwrap(arg);
+            if is_structure(arg) {
+                let parent = self.lower.container_node(&mut self.container);
+                call.structures
+                    .push(self.lower.structure(parent, arg, None));
+                continue;
+            }
+            match arg {
+                syn::Expr::Closure(_) => {
+                    call.inline_closures
+                        .push(one_line(&self.lower.p.text_of(arg.span())));
+                }
+                syn::Expr::Path(p) => {
+                    if let Some(name) = vars::local_name(p) {
+                        call.arg_names.push(name);
+                    }
+                }
+                syn::Expr::Reference(r) => {
+                    if let syn::Expr::Path(p) = unwrap(&r.expr)
+                        && let Some(name) = vars::local_name(p)
+                    {
+                        call.arg_names.push(name);
+                    }
+                }
+                _ => {}
+            }
+            self.visit_expr(arg);
+        }
+    }
+
+    fn new_call(&self, kind: CallKind, path: Vec<String>, span: proc_macro2::Span) -> CallSite {
+        CallSite {
+            kind,
+            path,
+            receiver: None,
+            literals: Vec::new(),
+            structures: Vec::new(),
+            inline_closures: Vec::new(),
+            arg_names: Vec::new(),
+            arg_count: 0,
+            span: self.lower.span(span),
+        }
+    }
+
+    fn push_call(&mut self, call: CallSite) {
+        self.lower.nodes[self.use_owner.index()].calls.push(call);
+    }
+
     fn macro_uses(&mut self, mac: &syn::Macro) {
         use syn::parse::Parser;
+        let call = self.new_call(CallKind::Macro, vars::segments(&mac.path), mac.path.span());
+        self.push_call(call);
         if vars::is_known_macro(&mac.path) {
             let parsed = syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated
                 .parse2(mac.tokens.clone())
@@ -864,10 +920,43 @@ impl<'ast> Visit<'ast> for Embed<'_, '_> {
                 return;
             }
             syn::Expr::MethodCall(m) => {
-                self.target(&m.receiver, vars::receiver_mode(&m.method.to_string()));
-                for arg in &m.args {
-                    self.visit_expr(arg);
+                let mut path = Vec::new();
+                let mut literals = Vec::new();
+                let receiver = chain(&m.receiver, &mut path, &mut literals);
+                let method = m.method.to_string();
+                path.push(method.clone());
+                if let Some(lit) = m.args.iter().find_map(vars::first_str_lit) {
+                    literals.push((method.clone(), lit));
                 }
+                let mut call = self.new_call(CallKind::Method, path, m.method.span());
+                call.receiver = receiver;
+                call.literals = literals;
+                self.target(&m.receiver, vars::receiver_mode(&method));
+                self.call_args(m.args.iter(), &mut call);
+                self.push_call(call);
+                return;
+            }
+            syn::Expr::Call(c) => {
+                let path = match unwrap(&c.func) {
+                    syn::Expr::Path(p) => vars::segments(&p.path),
+                    other => {
+                        self.visit_expr(other);
+                        Vec::new()
+                    }
+                };
+                let mut call = self.new_call(CallKind::Function, path, c.func.span());
+                if let Some(lit) = c.args.iter().find_map(vars::first_str_lit) {
+                    let name = call.name().to_string();
+                    call.literals.push((name, lit));
+                }
+                if let syn::Expr::Path(p) = unwrap(&c.func)
+                    && let Some(name) = vars::local_name(p)
+                {
+                    // Calling a closure stored in a local variable.
+                    self.use_name(name, p.span(), UseMode::Read, true);
+                }
+                self.call_args(c.args.iter(), &mut call);
+                self.push_call(call);
                 return;
             }
             syn::Expr::Let(l) => {
@@ -891,6 +980,47 @@ impl<'ast> Visit<'ast> for Embed<'_, '_> {
 
     // Items inside expressions are not part of the control flow.
     fn visit_item(&mut self, _: &'ast syn::Item) {}
+}
+
+/// Receiver chain of a method call: path segments and method names from the
+/// root outwards; returns the local variable the chain starts at.
+fn chain(
+    e: &syn::Expr,
+    path: &mut Vec<String>,
+    literals: &mut Vec<(String, String)>,
+) -> Option<String> {
+    match unwrap(e) {
+        syn::Expr::MethodCall(m) => {
+            let root = chain(&m.receiver, path, literals);
+            let method = m.method.to_string();
+            if let Some(lit) = m.args.iter().find_map(vars::first_str_lit) {
+                literals.push((method.clone(), lit));
+            }
+            path.push(method);
+            root
+        }
+        syn::Expr::Call(c) => {
+            if let syn::Expr::Path(p) = unwrap(&c.func) {
+                path.extend(vars::segments(&p.path));
+                if let Some(lit) = c.args.iter().find_map(vars::first_str_lit) {
+                    literals.push((path.last().cloned().unwrap_or_default(), lit));
+                }
+            }
+            None
+        }
+        syn::Expr::Path(p) => match vars::local_name(p) {
+            Some(name) => Some(name),
+            None => {
+                path.extend(vars::segments(&p.path));
+                None
+            }
+        },
+        syn::Expr::Field(f) => chain(&f.base, path, literals),
+        syn::Expr::Try(t) => chain(&t.expr, path, literals),
+        syn::Expr::Await(a) => chain(&a.base, path, literals),
+        syn::Expr::Reference(r) => chain(&r.expr, path, literals),
+        _ => None,
+    }
 }
 
 fn unwrap(e: &syn::Expr) -> &syn::Expr {

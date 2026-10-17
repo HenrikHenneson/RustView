@@ -8,6 +8,7 @@ mod diagram;
 mod editor;
 mod highlight;
 mod loader;
+mod threads;
 mod tree;
 mod wires;
 
@@ -19,6 +20,8 @@ pub struct Options {
     pub editor: EditorCommand,
     /// Function to select after loading (qualified path or a `::`-suffix of it).
     pub select: Option<String>,
+    /// Start with the project-wide thread overview.
+    pub threads: bool,
 }
 
 pub fn run(options: Options) -> eframe::Result {

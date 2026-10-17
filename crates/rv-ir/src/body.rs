@@ -50,6 +50,54 @@ pub struct Node {
     /// Variables read or written by this node itself (not by nested structures),
     /// in source order.
     pub uses: Vec<VarUse>,
+    /// Calls made by this node itself (not by nested structures), innermost first.
+    pub calls: Vec<CallSite>,
+}
+
+/// A function call, method call or macro invocation, as written.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CallSite {
+    pub kind: CallKind,
+    /// Function: path segments (`["std", "thread", "spawn"]`).
+    /// Method: the receiver chain followed by the method, e.g.
+    /// `["std", "thread", "Builder", "new", "name", "spawn"]`.
+    /// Macro: path segments of the macro (`["tokio", "select"]`).
+    pub path: Vec<String>,
+    /// Local variable a method chain starts at (`tx` in `tx.send(x)`).
+    pub receiver: Option<String>,
+    /// First string literal passed to a link of the chain: `("name", "ec-task")`.
+    pub literals: Vec<(String, String)>,
+    /// Closures and `async` blocks passed as arguments (lowered as structures).
+    pub structures: Vec<NodeId>,
+    /// Single-expression closures passed as arguments, as text.
+    pub inline_closures: Vec<String>,
+    /// Plain local variables passed as arguments.
+    pub arg_names: Vec<String>,
+    pub arg_count: usize,
+    pub span: Span,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CallKind {
+    Function,
+    Method,
+    Macro,
+}
+
+impl CallSite {
+    /// Last path segment: the called function, method or macro name.
+    pub fn name(&self) -> &str {
+        self.path.last().map_or("", String::as_str)
+    }
+
+    /// `true` if the path ends with `suffix` (e.g. `["thread", "spawn"]`).
+    pub fn ends_with(&self, suffix: &[&str]) -> bool {
+        self.path.len() >= suffix.len()
+            && self.path[self.path.len() - suffix.len()..]
+                .iter()
+                .zip(suffix)
+                .all(|(a, b)| a == b)
+    }
 }
 
 /// A variable introduced by a pattern.
@@ -58,6 +106,8 @@ pub struct VarDef {
     pub name: String,
     pub span: Span,
     pub mutable: bool,
+    /// Type as written, if annotated (parameters, `let x: T`).
+    pub ty: Option<String>,
 }
 
 /// A mention of a local variable name. Whether it really refers to a local

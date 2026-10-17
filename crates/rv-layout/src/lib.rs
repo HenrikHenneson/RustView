@@ -187,6 +187,8 @@ pub enum ItemKind {
         text: Text,
         /// `?2`, `=>` (value) etc.
         badges: Option<Text>,
+        /// Annotation from the caller (e.g. "thread 'worker'").
+        note: Option<Text>,
     },
 }
 
@@ -197,6 +199,8 @@ pub struct StructItem {
     pub toggle: Rect,
     pub prefix: Option<Text>,
     pub title: Text,
+    /// Annotation from the caller (e.g. "thread 'worker'").
+    pub note: Option<Text>,
     /// Exits to this structure, or the size when collapsed.
     pub info: Option<Text>,
     pub selector: Option<Selector>,
@@ -223,12 +227,16 @@ pub struct Text {
     pub rect: Rect,
 }
 
+/// Short annotations shown next to a node's label (lane badges etc.).
+pub type Notes = HashMap<NodeId, String>;
+
 pub fn layout(
     body: &Body,
     state: &ViewState,
     defaults: &HashSet<NodeId>,
     orientation: Orientation,
     metrics: Metrics,
+    notes: &Notes,
 ) -> Layout {
     let mut exits: HashMap<NodeId, ExitCounts> = HashMap::new();
     for e in &body.exits {
@@ -245,6 +253,7 @@ pub fn layout(
         sizes: vec![Vec2::ZERO; body.nodes.len()],
         stmt_counts: stmt_counts(body),
         exits,
+        notes,
         items: Vec::new(),
         index: HashMap::new(),
     };
@@ -322,6 +331,7 @@ struct Ctx<'a> {
     sizes: Vec<Vec2>,
     stmt_counts: Vec<usize>,
     exits: HashMap<NodeId, ExitCounts>,
+    notes: &'a Notes,
     items: Vec<Item>,
     index: HashMap<NodeId, usize>,
 }
@@ -394,6 +404,9 @@ impl Ctx<'_> {
         if let Some(p) = &prefix {
             w += self.m.text(p) + gap;
         }
+        if let Some(n) = self.notes.get(&id) {
+            w += 2.0 * gap + self.m.text(n);
+        }
         if let Some(i) = &info {
             w += 2.0 * gap + self.m.text(i);
         }
@@ -422,6 +435,9 @@ impl Ctx<'_> {
         let mut w = self.m.text(&self.stmt_text(id)) + 2.0 * PAD;
         if let Some(b) = self.stmt_badges(id) {
             w += self.m.char_width + self.m.text(&b);
+        }
+        if let Some(n) = self.notes.get(&id) {
+            w += 2.0 * self.m.char_width + self.m.text(n);
         }
         let mut h = self.row();
         for &c in &self.body.node(id).children.clone() {
@@ -527,6 +543,15 @@ impl Ctx<'_> {
                 text: b,
             }
         });
+        let note_x =
+            badges.as_ref().map_or(text_rect.max.x, |b| b.rect.max.x) + 2.0 * self.m.char_width;
+        let note = self.notes.get(&id).map(|n| Text {
+            rect: Rect::from_min_size(
+                pos2(note_x, text_pos.y),
+                vec2(self.m.text(n), self.m.line_height),
+            ),
+            text: n.clone(),
+        });
         self.push(Item {
             node: id,
             rect,
@@ -537,6 +562,7 @@ impl Ctx<'_> {
                     rect: text_rect,
                 },
                 badges,
+                note,
             },
         });
         let mut y = rect.min.y + self.row();
@@ -568,6 +594,10 @@ impl Ctx<'_> {
         };
         let prefix = prefix.map(|p| text_at(p, &mut x, &self.m));
         let title = text_at(title, &mut x, &self.m);
+        let note = self.notes.get(&id).map(|n| {
+            x += gap;
+            text_at(n.clone(), &mut x, &self.m)
+        });
         let info = info.map(|i| {
             x += gap;
             text_at(i, &mut x, &self.m)
@@ -627,6 +657,7 @@ impl Ctx<'_> {
                 toggle,
                 prefix,
                 title,
+                note,
                 info,
                 selector,
             })),

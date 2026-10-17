@@ -72,7 +72,14 @@ fn everything_nested_and_disjoint_in_both_orientations() {
     let mut state = ViewState::default();
     state.all_cases.insert(NodeId(0), true);
     for orientation in [Orientation::Vertical, Orientation::Horizontal] {
-        let l = layout(&body, &state, &all_expanded(&body), orientation, METRICS);
+        let l = layout(
+            &body,
+            &state,
+            &all_expanded(&body),
+            orientation,
+            METRICS,
+            &Notes::new(),
+        );
         check_nesting(&body, &l);
         assert!(l.items.iter().all(|i| {
             Rect::from_min_size(Pos2::ZERO, l.size)
@@ -97,6 +104,7 @@ fn sequence_follows_orientation() {
             &all_expanded(&body),
             orientation,
             METRICS,
+            &Notes::new(),
         );
         let rects: Vec<Rect> = items.iter().map(|&i| l.item(i).unwrap().rect).collect();
         for w in rects.windows(2) {
@@ -119,6 +127,7 @@ fn collapsed_structures_hide_their_content() {
         &only_root,
         Orientation::Vertical,
         METRICS,
+        &Notes::new(),
     );
     let frame = body.node(body.root).children[0];
     // Root frame items are visible, nothing below the loop.
@@ -143,6 +152,7 @@ fn many_cases_show_one_at_a_time() {
         &all_expanded(&body),
         Orientation::Vertical,
         METRICS,
+        &Notes::new(),
     );
     let m = (0..body.nodes.len() as u32)
         .map(NodeId)
@@ -166,6 +176,7 @@ fn many_cases_show_one_at_a_time() {
         &all_expanded(&body),
         Orientation::Vertical,
         METRICS,
+        &Notes::new(),
     );
     assert!(l.item(cases[4]).is_some() && l.item(cases[0]).is_none());
 }
@@ -197,6 +208,7 @@ fn exits_are_summarized_at_their_target() {
         &all_expanded(&body),
         Orientation::Vertical,
         METRICS,
+        &Notes::new(),
     );
     let ItemKind::Structure(root) = &l.item(body.root).unwrap().kind else {
         panic!()

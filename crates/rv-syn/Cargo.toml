@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[dev-dependencies]
+rv-analysis.workspace = true
+
 [dependencies]
 rv-ir.workspace = true
 anyhow.workspace = true

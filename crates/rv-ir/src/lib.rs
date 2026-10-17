@@ -14,8 +14,8 @@ mod body;
 mod span;
 
 pub use body::{
-    Body, Exit, ExitKind, FrameRole, Node, NodeId, NodeKind, StmtKind, StructKind, UseMode, VarDef,
-    VarUse,
+    Body, CallKind, CallSite, Exit, ExitKind, FrameRole, Node, NodeId, NodeKind, StmtKind,
+    StructKind, UseMode, VarDef, VarUse,
 };
 pub use span::{LineCol, LineIndex, Span};
 
@@ -53,6 +53,8 @@ pub struct Project {
     pub functions: Vec<Function>,
     /// Problems found while loading (parse errors, missing module files, ...).
     pub diagnostics: Vec<Diagnostic>,
+    /// `type Name = Target;` items of the whole project (name -> target as written).
+    pub type_aliases: std::collections::HashMap<String, String>,
 }
 
 impl Project {
