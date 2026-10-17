@@ -25,6 +25,12 @@ the triangle to expand/collapse a structure and ◀ ▶ to switch cases. Clickin
 line in the code panel selects the matching node in the diagram. Drag to move,
 Ctrl+wheel to zoom. Files are reloaded on change.
 
+*ƒx Expressions* (or `--expressions`) shows the statements of the selected
+structure — or of the whole function — as data flow of their expressions:
+operands (variables in their wire color, literals) on the left, calls,
+methods and operators in between, the result (`let x`, assignment) on the
+right. Clicking a part highlights exactly that code.
+
 Data wires connect the place where a local variable gets its value to the
 places that use it (hover a wire for the name). Changes (`=`, `+=`, `&mut`,
 `push`, ...) are drawn as orange sequence wires; dashed means "a method call on

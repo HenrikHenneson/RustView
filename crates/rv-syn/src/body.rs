@@ -139,6 +139,7 @@ impl<'a> Lower<'a> {
             defs: Vec::new(),
             uses: Vec::new(),
             calls: Vec::new(),
+            expr: None,
         });
         if let Some(p) = parent {
             self.nodes[p.index()].children.push(id);
@@ -170,6 +171,7 @@ impl<'a> Lower<'a> {
                     let mut v = Embed::new(self, id, id, Container::Node(id));
                     v.macro_uses(&m.mac);
                     self.finish_label(id);
+                    self.attach_tree(id, |b| b.macro_node(&m.mac, m.span()));
                     self.nodes[id.index()].value = last && m.semi_token.is_none();
                 }
                 syn::Stmt::Expr(e, semi) => self.expr_stmt(frame, e, last && semi.is_none(), None),
@@ -229,6 +231,8 @@ impl<'a> Lower<'a> {
         }
         self.nodes[id.index()].defs = defs;
         self.finish_label(id);
+        let init = local.init.as_ref().map(|i| &*i.expr);
+        self.attach_tree(id, |b| b.bind(&local.pat, init, local.span()));
     }
 
     /// A statement consisting of an expression.
@@ -265,6 +269,7 @@ impl<'a> Lower<'a> {
                         self.embed(id, Container::Node(id), inner);
                     }
                     self.finish_label(id);
+                    self.attach_tree(id, |b| b.expr(e));
                     id
                 }
                 _ => {
@@ -278,6 +283,7 @@ impl<'a> Lower<'a> {
                     );
                     self.embed(id, Container::Node(id), e);
                     self.finish_label(id);
+                    self.attach_tree(id, |b| b.expr(e));
                     id
                 }
             }
@@ -686,6 +692,26 @@ impl<'a> Lower<'a> {
         }
         text.push_str(self.raw(pos..full.end));
         self.nodes[id.index()].label = one_line(&text);
+    }
+
+    /// Expression tree of a statement, linked to its embedded structures.
+    fn attach_tree(
+        &mut self,
+        id: NodeId,
+        build: impl FnOnce(&mut crate::exprtree::TreeBuilder) -> usize,
+    ) {
+        let structures = self.nodes[id.index()]
+            .children
+            .iter()
+            .map(|&c| {
+                let n = &self.nodes[c.index()];
+                let label: String = n.label.chars().take(24).collect();
+                (n.span.clone(), c, label)
+            })
+            .collect();
+        let mut b = crate::exprtree::TreeBuilder::new(self.p, self.file, structures);
+        let root = build(&mut b);
+        self.nodes[id.index()].expr = Some(b.finish(root));
     }
 
     fn item_label(&self, item: &syn::Item) -> String {

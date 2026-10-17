@@ -223,3 +223,44 @@ fn exits_are_summarized_at_their_target() {
     };
     assert_eq!(s.info.as_ref().unwrap().text, "exits: break×1 continue×1");
 }
+
+#[test]
+fn expression_level_puts_operands_left_of_operations() {
+    let body = body();
+    let mut state = ViewState::default();
+    state.expressions.insert(body.root);
+    let l = layout(
+        &body,
+        &state,
+        &all_expanded(&body),
+        Orientation::Vertical,
+        METRICS,
+        &Notes::new(),
+    );
+    assert!(!l.exprs.is_empty());
+    for e in &l.exprs {
+        // Inside its statement.
+        let stmt = l.item(e.stmt).unwrap();
+        assert!(stmt.rect.expand(0.01).contains_rect(e.rect));
+        // Every operand ends left of the operation it feeds.
+        let tree = body.node(e.stmt).expr.as_ref().unwrap();
+        for &c in &tree.nodes[e.index].children {
+            let child = l
+                .exprs
+                .iter()
+                .find(|x| x.stmt == e.stmt && x.index == c)
+                .unwrap();
+            assert!(child.rect.max.x < e.rect.min.x);
+        }
+    }
+    // Without the switch there are none.
+    let plain = layout(
+        &body,
+        &ViewState::default(),
+        &all_expanded(&body),
+        Orientation::Vertical,
+        METRICS,
+        &Notes::new(),
+    );
+    assert!(plain.exprs.is_empty());
+}

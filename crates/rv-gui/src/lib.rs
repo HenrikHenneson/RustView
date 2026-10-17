@@ -28,6 +28,8 @@ pub struct Options {
     pub threads: Option<String>,
     /// Start with the module call graph; a non-empty value opens that module.
     pub callgraph: Option<String>,
+    /// Expression level for whole functions from the start.
+    pub expressions: bool,
 }
 
 pub fn run(options: Options) -> eframe::Result {

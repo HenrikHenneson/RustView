@@ -82,7 +82,7 @@ impl App {
             load_error: None,
             load_time: Duration::ZERO,
             generation: 0,
-            diagram: DiagramView::default(),
+            diagram: DiagramView::with_expressions(options.expressions),
             threads: ThreadsView::starting_in(options.threads.as_deref()),
             center: if options.callgraph.is_some() {
                 CenterTab::CallGraph
@@ -551,6 +551,9 @@ impl App {
                 let node = body.node(n);
                 self.code
                     .show_span(project, node.span.clone(), node.head.clone());
+            }
+            DiagramAction::ShowSpan(span) => {
+                self.code.show_span(project, span.clone(), span);
             }
             DiagramAction::Open(n) => {
                 let head = body.node(n).head.clone();
