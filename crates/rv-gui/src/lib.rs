@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 mod app;
+mod callgraph_view;
 mod code_view;
 mod comm_view;
 mod diagram;
@@ -25,6 +26,8 @@ pub struct Options {
     /// Start with the thread overview in this mode (`graph`,
     /// `communication`, `functions`).
     pub threads: Option<String>,
+    /// Start with the module call graph; a non-empty value opens that module.
+    pub callgraph: Option<String>,
 }
 
 pub fn run(options: Options) -> eframe::Result {

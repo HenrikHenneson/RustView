@@ -26,6 +26,11 @@ struct Cli {
     /// `graph` (default), `communication` or `functions`.
     #[arg(long, num_args = 0..=1, default_missing_value = "graph", value_name = "VIEW")]
     threads: Option<String>,
+
+    /// Start with the call graph on module level, optionally showing the
+    /// functions of one module (e.g. `ec_task`).
+    #[arg(long, num_args = 0..=1, default_missing_value = "", value_name = "MODULE")]
+    callgraph: Option<String>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -38,6 +43,7 @@ fn main() -> anyhow::Result<()> {
         editor,
         select: cli.select,
         threads: cli.threads,
+        callgraph: cli.callgraph,
     })
     .map_err(|e| anyhow::anyhow!("{e}"))
 }

@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use egui::{Key, KeyboardShortcut, Modifiers, RichText, Ui};
 use rv_ir::{FnId, Project, Severity};
 
+use crate::callgraph_view::{CallGraphAction, CallGraphView};
 use crate::code_view::{CodeAction, CodeView};
 use crate::diagram::{DiagramAction, DiagramView};
 use crate::editor::EditorCommand;
@@ -24,6 +25,7 @@ const LIMITS_NOTE: &str = "Syntactic analysis only: macros are not expanded, nam
 enum CenterTab {
     Diagram,
     Threads,
+    CallGraph,
 }
 
 /// Actions collected while drawing and executed at the end of the frame.
@@ -49,6 +51,7 @@ pub struct App {
     generation: u64,
     diagram: DiagramView,
     threads: ThreadsView,
+    callgraph: CallGraphView,
     center: CenterTab,
     selected: Option<FnId>,
     /// Last selection the tree was expanded to.
@@ -81,11 +84,14 @@ impl App {
             generation: 0,
             diagram: DiagramView::default(),
             threads: ThreadsView::starting_in(options.threads.as_deref()),
-            center: if options.threads.is_some() {
+            center: if options.callgraph.is_some() {
+                CenterTab::CallGraph
+            } else if options.threads.is_some() {
                 CenterTab::Threads
             } else {
                 CenterTab::Diagram
             },
+            callgraph: CallGraphView::opening(options.callgraph.as_deref()),
             selected: None,
             revealed: None,
             tree: TreeView::default(),
@@ -475,11 +481,25 @@ impl App {
             ui.selectable_value(&mut self.center, CenterTab::Diagram, "Function diagram");
             ui.selectable_value(&mut self.center, CenterTab::Threads, "Threads")
                 .on_hover_text("All threads and tasks of the project");
+            ui.selectable_value(&mut self.center, CenterTab::CallGraph, "Call graph")
+                .on_hover_text("Calls between modules, with drill-down to functions");
         });
         ui.separator();
         match self.center {
             CenterTab::Diagram => self.diagram_panel(ui),
             CenterTab::Threads => self.threads_panel(ui),
+            CenterTab::CallGraph => self.callgraph_panel(ui),
+        }
+    }
+
+    fn callgraph_panel(&mut self, ui: &mut Ui) {
+        let Some(project) = &self.project else {
+            ui.centered_and_justified(|ui| ui.spinner());
+            return;
+        };
+        if let CallGraphAction::ShowFn(f) = self.callgraph.ui(ui, project, self.generation) {
+            self.select(f);
+            self.center = CenterTab::Diagram;
         }
     }
 
