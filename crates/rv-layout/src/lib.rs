@@ -22,6 +22,9 @@ const FRAME_PAD: f32 = 8.0;
 const GAP: f32 = 8.0;
 /// Width of a structure's border around its frames.
 const BORDER: f32 = 4.0;
+/// Space between operand column and operation in expression trees.
+const EXPR_GAP_X: f32 = 16.0;
+const EXPR_GAP_Y: f32 = 4.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Orientation {
@@ -59,6 +62,8 @@ pub struct ViewState {
     /// Shown case of case structures in one-at-a-time mode.
     pub case_index: HashMap<NodeId, usize>,
     pub all_cases: HashMap<NodeId, bool>,
+    /// Structures whose statements show their expressions as data flow.
+    pub expressions: HashSet<NodeId>,
 }
 
 impl ViewState {
@@ -156,6 +161,20 @@ pub struct Layout {
     pub items: Vec<Item>,
     pub size: Vec2,
     index: HashMap<NodeId, usize>,
+    /// Expression nodes of statements in expression mode.
+    pub exprs: Vec<ExprItem>,
+    /// Operand -> operation, as (from, to) points.
+    pub expr_wires: Vec<(Pos2, Pos2)>,
+}
+
+/// One node of a statement's expression tree.
+#[derive(Clone, Debug)]
+pub struct ExprItem {
+    pub stmt: NodeId,
+    /// Index into the statement's `ExprTree::nodes`.
+    pub index: usize,
+    pub rect: Rect,
+    pub text: Text,
 }
 
 impl Layout {
@@ -258,6 +277,8 @@ pub fn layout(
         notes,
         items: Vec::new(),
         index: HashMap::new(),
+        exprs: Vec::new(),
+        expr_wires: Vec::new(),
     };
     let size = ctx.measure(body.root);
     ctx.place(body.root, Rect::from_min_size(Pos2::ZERO, size), 0);
@@ -265,6 +286,8 @@ pub fn layout(
         items: ctx.items,
         size,
         index: ctx.index,
+        exprs: ctx.exprs,
+        expr_wires: ctx.expr_wires,
     }
 }
 
@@ -335,10 +358,12 @@ struct Ctx<'a> {
     exits: HashMap<NodeId, ExitCounts>,
     notes: &'a Notes,
     items: Vec<Item>,
+    exprs: Vec<ExprItem>,
+    expr_wires: Vec<(Pos2, Pos2)>,
     index: HashMap<NodeId, usize>,
 }
 
-impl Ctx<'_> {
+impl<'a> Ctx<'a> {
     fn expanded(&self, id: NodeId) -> bool {
         self.state.is_expanded(self.defaults, id)
     }
@@ -442,12 +467,100 @@ impl Ctx<'_> {
             w += 2.0 * self.m.char_width + self.m.text(n);
         }
         let mut h = self.row();
+        if let Some(t) = self.expr_tree(id) {
+            let size = self.tree_size(t, t.root);
+            w = w.max(size.x + 2.0 * PAD);
+            h += size.y + PAD;
+        }
         for &c in &self.body.node(id).children.clone() {
             let s = self.measure(c);
             w = w.max(s.x + 2.0 * PAD);
             h += s.y + PAD;
         }
         vec2(w, h)
+    }
+
+    /// The statement's expression tree, if its structure shows expressions.
+    fn expr_tree(&self, id: NodeId) -> Option<&'a rv_ir::ExprTree> {
+        let body: &'a Body = self.body;
+        let tree = body.node(id).expr.as_ref()?;
+        // Trivial trees (a single call without operands) add nothing.
+        if tree.nodes.len() < 2 {
+            return None;
+        }
+        let mut cur = body.node(id).parent;
+        while let Some(n) = cur {
+            if self.state.expressions.contains(&n) {
+                return Some(tree);
+            }
+            cur = body.node(n).parent;
+        }
+        None
+    }
+
+    fn expr_box(&self, text: &str) -> Vec2 {
+        vec2(self.m.text(text) + 2.0 * PAD, self.m.line_height + PAD)
+    }
+
+    /// Size of a subtree: operands in a column left of their operation.
+    fn tree_size(&self, t: &rv_ir::ExprTree, i: usize) -> Vec2 {
+        let node = &t.nodes[i];
+        let own = self.expr_box(&node.text);
+        if node.children.is_empty() {
+            return own;
+        }
+        let kids: Vec<Vec2> = node
+            .children
+            .iter()
+            .map(|&c| self.tree_size(t, c))
+            .collect();
+        let kids_w = kids.iter().map(|k| k.x).fold(0.0, f32::max);
+        let kids_h = kids.iter().map(|k| k.y).sum::<f32>() + EXPR_GAP_Y * (kids.len() - 1) as f32;
+        vec2(kids_w + EXPR_GAP_X + own.x, own.y.max(kids_h))
+    }
+
+    /// Places a subtree in `area`; returns the operation's box.
+    fn place_tree(&mut self, stmt: NodeId, t: &rv_ir::ExprTree, i: usize, min: Pos2) -> Rect {
+        let node = &t.nodes[i];
+        let size = self.tree_size(t, i);
+        let own_size = self.expr_box(&node.text);
+        let own = Rect::from_min_size(
+            pos2(
+                min.x + size.x - own_size.x,
+                min.y + (size.y - own_size.y) / 2.0,
+            ),
+            own_size,
+        );
+        let mut y = min.y;
+        if !node.children.is_empty() {
+            let kids_h: f32 = node
+                .children
+                .iter()
+                .map(|&c| self.tree_size(t, c).y)
+                .sum::<f32>()
+                + EXPR_GAP_Y * (node.children.len() - 1) as f32;
+            y += (size.y - kids_h) / 2.0;
+        }
+        for &c in &node.children {
+            let ks = self.tree_size(t, c);
+            let child = self.place_tree(stmt, t, c, pos2(min.x, y));
+            self.expr_wires
+                .push((child.right_center(), own.left_center()));
+            y += ks.y + EXPR_GAP_Y;
+        }
+        self.exprs.push(ExprItem {
+            stmt,
+            index: i,
+            rect: own,
+            text: Text {
+                text: node.text.clone(),
+                rect: Rect::from_min_size(
+                    own.min + vec2(PAD, PAD / 2.0),
+                    vec2(self.m.text(&node.text), self.m.line_height),
+                ),
+            },
+        });
+        own
     }
 
     fn measure_structure(&mut self, id: NodeId) -> Vec2 {
@@ -568,6 +681,11 @@ impl Ctx<'_> {
             },
         });
         let mut y = rect.min.y + self.row();
+        if let Some(t) = self.expr_tree(id) {
+            let size = self.tree_size(t, t.root);
+            self.place_tree(id, t, t.root, pos2(rect.min.x + PAD, y));
+            y += size.y + PAD;
+        }
         for c in self.body.node(id).children.clone() {
             let size = self.sizes[c.index()];
             self.place(

@@ -52,6 +52,80 @@ pub struct Node {
     pub uses: Vec<VarUse>,
     /// Calls made by this node itself (not by nested structures), innermost first.
     pub calls: Vec<CallSite>,
+    /// The statement's expression as a data-flow tree (statements only).
+    pub expr: Option<ExprTree>,
+}
+
+/// An expression as a tree: operands are children, the root is the result.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExprTree {
+    pub nodes: Vec<ExprNode>,
+    pub root: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExprNode {
+    pub kind: ExprKind,
+    /// Short text: variable name, literal, `f()`, `.push()`, `+`, ...
+    pub text: String,
+    /// Operands in order (for a method call the receiver comes first).
+    pub children: Vec<usize>,
+    pub span: Span,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExprKind {
+    /// Local variable (or anything that looks like one).
+    Var,
+    /// Literal or constant path (`3`, `"x"`, `None`, `MAX`).
+    Literal,
+    Call,
+    Method,
+    Macro,
+    Operator,
+    Field,
+    Index,
+    /// Struct, tuple or array literal.
+    Construct,
+    Ref,
+    Cast,
+    /// `?`
+    Try,
+    Await,
+    /// Single-expression closure, shown as text.
+    Closure,
+    /// A structure (if, match, closure, ...) lowered as its own node.
+    Structure(NodeId),
+    /// `let pattern =`: the statement's result goes into these bindings.
+    Bind,
+    /// `place =` / `place +=`
+    Assign,
+    Return,
+    /// Anything else, shown as text.
+    Other,
+}
+
+impl ExprTree {
+    /// `(op a b)` notation for tests and debugging.
+    pub fn sexpr(&self) -> String {
+        fn go(t: &ExprTree, i: usize, out: &mut String) {
+            let n = &t.nodes[i];
+            if n.children.is_empty() {
+                out.push_str(&n.text);
+                return;
+            }
+            out.push('(');
+            out.push_str(&n.text);
+            for &c in &n.children {
+                out.push(' ');
+                go(t, c, out);
+            }
+            out.push(')');
+        }
+        let mut out = String::new();
+        go(self, self.root, &mut out);
+        out
+    }
 }
 
 /// A function call, method call or macro invocation, as written.

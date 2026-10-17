@@ -24,6 +24,8 @@ pub enum DiagramAction {
     None,
     Select(NodeId),
     Open(NodeId),
+    /// A sub-expression was clicked: show exactly this part of the code.
+    ShowSpan(rv_ir::Span),
 }
 
 /// Per-function view state, kept while switching between functions.
@@ -54,6 +56,8 @@ pub struct DiagramView {
     /// Analyses of the shown function, per project generation.
     analysis: Option<((FnId, u64), Analysis)>,
     pub wire_mode: WireMode,
+    /// New function views start with the expression level on.
+    pub expressions_by_default: bool,
     /// Wire geometry for the current layout.
     wire_cache: Option<(LayoutKey, Vec<wires::Wire>)>,
     pub selected: Option<NodeId>,
@@ -64,11 +68,19 @@ pub struct DiagramView {
 }
 
 impl DiagramView {
+    pub fn with_expressions(on: bool) -> Self {
+        DiagramView {
+            expressions_by_default: on,
+            ..DiagramView::default()
+        }
+    }
+
     /// Forget everything except the orientation (another project was opened).
     pub fn reset(&mut self) {
         *self = DiagramView {
             orientation: self.orientation,
             wire_mode: self.wire_mode,
+            expressions_by_default: self.expressions_by_default,
             ..DiagramView::default()
         };
     }
@@ -105,9 +117,9 @@ impl DiagramView {
         let view = self
             .views
             .entry(func.qual_path.clone())
-            .or_insert_with(|| new_view(body));
+            .or_insert_with(|| new_view(body, self.expressions_by_default));
         if view.node_count != body.nodes.len() {
-            *view = new_view(body);
+            *view = new_view(body, self.expressions_by_default);
         }
         // Expand all structures on the way and pick the right case.
         let mut child = node;
@@ -142,9 +154,9 @@ impl DiagramView {
         let view = self
             .views
             .entry(func.qual_path.clone())
-            .or_insert_with(|| new_view(body));
+            .or_insert_with(|| new_view(body, self.expressions_by_default));
         if view.node_count != body.nodes.len() {
-            *view = new_view(body);
+            *view = new_view(body, self.expressions_by_default);
             self.selected = None;
         }
 
@@ -175,13 +187,21 @@ impl DiagramView {
         }
         let analysis = &self.analysis.as_ref().expect("computed above").1;
         if self.cached.as_ref().is_none_or(|(k, _)| *k != key) {
+            // Mark structures that show expressions.
+            let mut notes = analysis.notes.clone();
+            for &s in &view.state.expressions {
+                notes
+                    .entry(s)
+                    .and_modify(|n| n.push_str(" · ƒx"))
+                    .or_insert_with(|| "ƒx".into());
+            }
             let l = rv_layout::layout(
                 body,
                 &view.state,
                 &view.defaults,
                 self.orientation,
                 metrics,
-                &analysis.notes,
+                &notes,
             );
             self.cached = Some((key, l));
         }
@@ -231,7 +251,15 @@ impl DiagramView {
             && let Some(p) = response.interact_pointer_pos()
         {
             let world = to_world(p);
-            if let Some(item) = layout.hit(world) {
+            if let Some(e) = layout.exprs.iter().find(|e| e.rect.contains(world)) {
+                let tree = body
+                    .node(e.stmt)
+                    .expr
+                    .as_ref()
+                    .expect("expression items come from trees");
+                self.selected = Some(e.stmt);
+                action = DiagramAction::ShowSpan(tree.nodes[e.index].span.clone());
+            } else if let Some(item) = layout.hit(world) {
                 match control_at(item, world) {
                     Some(control) => {
                         apply_control(control, item.node, body, &mut view.state, &view.defaults);
@@ -406,6 +434,56 @@ impl DiagramView {
             }
         }
 
+        // Expression trees inside statements.
+        let hovered_expr = response
+            .hover_pos()
+            .map(to_world)
+            .and_then(|p| layout.exprs.iter().find(|e| e.rect.contains(p)));
+        for &(a, b) in &layout.expr_wires {
+            let (a, b) = (origin + a.to_vec2() * zoom, origin + b.to_vec2() * zoom);
+            if rect.contains(a) || rect.contains(b) {
+                painter.line_segment([a, b], Stroke::new(1.2, style.weak));
+                let dir = (b - a).normalized();
+                let side = vec2(-dir.y, dir.x) * 2.5 * zoom.max(0.5);
+                let tip = b;
+                let back = tip - dir * 5.0 * zoom.max(0.5);
+                painter.add(egui::Shape::convex_polygon(
+                    vec![tip, back + side, back - side],
+                    style.weak,
+                    Stroke::NONE,
+                ));
+            }
+        }
+        for e in &layout.exprs {
+            let r = to_screen(e.rect);
+            if !r.intersects(rect) {
+                continue;
+            }
+            let tree = body
+                .node(e.stmt)
+                .expr
+                .as_ref()
+                .expect("expression items come from trees");
+            let node = &tree.nodes[e.index];
+            let base = expr_color(node.kind, &node.text, ui.visuals().dark_mode, body);
+            let radius = CornerRadius::same((3.0 * zoom).min(255.0) as u8);
+            painter.rect_filled(
+                r,
+                radius,
+                lerp(style.bg, base, if style.dark { 0.35 } else { 0.22 }),
+            );
+            painter.rect_stroke(r, radius, Stroke::new(1.0, base), StrokeKind::Inside);
+            if hovered_expr.is_some_and(|h| h.stmt == e.stmt && h.index == e.index) {
+                painter.rect_stroke(
+                    r,
+                    radius,
+                    Stroke::new(1.5, style.hover),
+                    StrokeKind::Outside,
+                );
+            }
+            text(e.text.rect, &e.text.text, style.text);
+        }
+
         // Wires on top of the boxes.
         let mut hovered_wire = None;
         let empty = Vec::new();
@@ -468,6 +546,20 @@ impl DiagramView {
         if let Some(i) = hovered_wire {
             let w = &wire_list[i];
             response.on_hover_ui_at_pointer(|ui| wire_tooltip(ui, body, analysis, w));
+        } else if let Some(e) = hovered_expr {
+            let tree = body
+                .node(e.stmt)
+                .expr
+                .as_ref()
+                .expect("expression items come from trees");
+            let node = &tree.nodes[e.index];
+            let snippet = project.snippet(&node.span).to_string();
+            let kind = format!("{:?}", node.kind);
+            response.on_hover_ui_at_pointer(|ui| {
+                ui.weak(kind);
+                ui.label(egui::RichText::new(snippet).monospace());
+                ui.weak("click: show in code");
+            });
         } else if let Some(item) = hovered {
             response.on_hover_ui_at_pointer(|ui| tooltip(ui, project, body, item.node));
         }
@@ -499,6 +591,37 @@ impl DiagramView {
             ui.selectable_value(&mut self.wire_mode, WireMode::Selected, "selected")
                 .on_hover_text("Only wires of the selected or hovered node");
             ui.selectable_value(&mut self.wire_mode, WireMode::Off, "off");
+            ui.separator();
+            // Expression level for the selected structure (or the whole function).
+            let target = self
+                .selected
+                .and_then(|n| {
+                    let mut cur = Some(n);
+                    while let Some(x) = cur {
+                        if matches!(body.node(x).kind, NodeKind::Structure { .. }) {
+                            return Some(x);
+                        }
+                        cur = body.node(x).parent;
+                    }
+                    None
+                })
+                .unwrap_or(body.root);
+            let on = view.state.expressions.contains(&target);
+            let what = if target == body.root { "the whole function".to_string() } else { format!("`{}`", body.node(target).label) };
+            if ui
+                .selectable_label(on, "ƒx Expressions")
+                .on_hover_text(format!(
+                    "Show statements as data flow of their expressions in {what} (select a structure to limit it)"
+                ))
+                .clicked()
+            {
+                if on {
+                    view.state.expressions.remove(&target);
+                } else {
+                    view.state.expressions.insert(target);
+                }
+                view.version += 1;
+            }
             ui.separator();
             if ui.button("Expand all").clicked() {
                 for (i, n) in body.nodes.iter().enumerate() {
@@ -561,8 +684,11 @@ impl DiagramView {
     }
 }
 
-fn new_view(body: &Body) -> FnView {
-    let state = ViewState::default();
+fn new_view(body: &Body, expressions: bool) -> FnView {
+    let mut state = ViewState::default();
+    if expressions {
+        state.expressions.insert(body.root);
+    }
     FnView {
         defaults: rv_layout::default_expanded(body, &state, BUDGET),
         state,
@@ -949,6 +1075,28 @@ impl Palette {
 
     fn stmt_line(&self, kind: &StmtKind) -> Color32 {
         lerp(self.bg, Self::stmt_base(kind), 0.7)
+    }
+}
+
+/// Color of an expression node by kind (variables: their wire color).
+fn expr_color(kind: rv_ir::ExprKind, text: &str, dark: bool, body: &Body) -> Color32 {
+    use rv_ir::ExprKind as K;
+    match kind {
+        K::Var => wires::color(text, WireKind::Data, dark),
+        K::Literal | K::Other => Color32::from_rgb(140, 140, 140),
+        K::Call | K::Method | K::Macro => Color32::from_rgb(80, 140, 210),
+        K::Operator | K::Field | K::Index | K::Cast | K::Ref | K::Try | K::Await => {
+            Color32::from_rgb(200, 150, 40)
+        }
+        K::Construct | K::Closure => Color32::from_rgb(150, 100, 210),
+        K::Bind => Color32::from_rgb(90, 170, 100),
+        K::Assign => Color32::from_rgb(225, 120, 40),
+        K::Return => Color32::from_rgb(220, 70, 60),
+        K::Structure(id) => match &body.node(id).kind {
+            NodeKind::Structure { kind, .. } if kind.is_loop() => Color32::from_rgb(70, 130, 220),
+            NodeKind::Structure { kind, .. } if kind.is_case() => Color32::from_rgb(220, 160, 40),
+            _ => Color32::from_rgb(150, 100, 210),
+        },
     }
 }
 

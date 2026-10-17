@@ -31,6 +31,10 @@ struct Cli {
     /// functions of one module (e.g. `ec_task`).
     #[arg(long, num_args = 0..=1, default_missing_value = "", value_name = "MODULE")]
     callgraph: Option<String>,
+
+    /// Show statements as data flow of their expressions from the start.
+    #[arg(long)]
+    expressions: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -44,6 +48,7 @@ fn main() -> anyhow::Result<()> {
         select: cli.select,
         threads: cli.threads,
         callgraph: cli.callgraph,
+        expressions: cli.expressions,
     })
     .map_err(|e| anyhow::anyhow!("{e}"))
 }

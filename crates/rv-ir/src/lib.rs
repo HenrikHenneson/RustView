@@ -14,8 +14,8 @@ mod body;
 mod span;
 
 pub use body::{
-    Body, CallKind, CallSite, Exit, ExitKind, FrameRole, Node, NodeId, NodeKind, StmtKind,
-    StructKind, UseMode, VarDef, VarUse,
+    Body, CallKind, CallSite, Exit, ExitKind, ExprKind, ExprNode, ExprTree, FrameRole, Node,
+    NodeId, NodeKind, StmtKind, StructKind, UseMode, VarDef, VarUse,
 };
 pub use span::{LineCol, LineIndex, Span};
 
