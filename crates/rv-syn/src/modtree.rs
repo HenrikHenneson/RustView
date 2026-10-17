@@ -297,6 +297,20 @@ impl Builder {
                     }
                 }
                 syn::Item::Mod(md) => self.module_item(p, file, md, m, ctx, walk),
+                syn::Item::Struct(st) => {
+                    if let syn::Fields::Named(named) = &st.fields {
+                        let fields = named
+                            .named
+                            .iter()
+                            .filter_map(|f| {
+                                Some((f.ident.as_ref()?.to_string(), p.text_of(f.ty.span())))
+                            })
+                            .collect();
+                        self.project
+                            .struct_fields
+                            .insert(st.ident.to_string(), fields);
+                    }
+                }
                 syn::Item::Type(t) => {
                     self.project
                         .type_aliases

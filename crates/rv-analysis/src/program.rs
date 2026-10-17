@@ -192,12 +192,24 @@ impl<'p> Resolver<'p> {
                         )
                     })
                     .collect();
-                if call.receiver.as_deref() == Some("self") {
-                    let own = self_type(&caller_fn.owner);
+                let own = self_type(&caller_fn.owner);
+                if call.receiver.as_deref() == Some("self") && call.field.is_none() {
                     return methods
                         .iter()
                         .find(|c| own.is_some() && self_type(&p.function(***c).owner) == own)
                         .map(|c| **c);
+                }
+                // Type of the receiver: a field's declared type or a variable's annotation.
+                let hints = self.receiver_types(caller, call);
+                let by_hint: Vec<&&FnId> = methods
+                    .iter()
+                    .filter(|c| {
+                        self_type(&p.function(***c).owner)
+                            .is_some_and(|t| hints.iter().any(|h| h == t))
+                    })
+                    .collect();
+                if by_hint.len() == 1 {
+                    return Some(**by_hint[0]);
                 }
                 // A type named in the chain (`Faden::neu(..).laufen()`).
                 let typed: Vec<&&FnId> = methods
@@ -214,6 +226,50 @@ impl<'p> Resolver<'p> {
             }
         }
     }
+}
+
+impl Resolver<'_> {
+    /// Type names that may be the receiver's type: from the declared type of
+    /// `self.field` or of the receiver variable (`x: &Arc<Geteilt>`).
+    fn receiver_types(&self, caller: FnId, call: &CallSite) -> Vec<String> {
+        let p = self.project;
+        let func = p.function(caller);
+        let receiver = call.receiver.as_deref();
+        let declared = match receiver {
+            Some("self") => self_type(&func.owner).map(str::to_string),
+            Some(r) => func.body.as_ref().and_then(|b| {
+                b.nodes
+                    .iter()
+                    .flat_map(|n| &n.defs)
+                    .find(|d| d.name == r)
+                    .and_then(|d| d.ty.clone())
+            }),
+            None => None,
+        };
+        let Some(declared) = declared else {
+            return Vec::new();
+        };
+        let ty = match &call.field {
+            // `self.handregler.x()` / `geteilt.stand.lock()`: type of the field.
+            Some(field) => type_names(&declared).iter().find_map(|s| {
+                p.struct_fields
+                    .get(s)?
+                    .iter()
+                    .find(|(f, _)| f == field)
+                    .map(|(_, t)| t.clone())
+            }),
+            None => Some(declared),
+        };
+        ty.map(|t| type_names(&t)).unwrap_or_default()
+    }
+}
+
+/// Capitalized identifiers in a type (`Arc<Mutex<Geteilt>>` -> Arc, Mutex, Geteilt).
+fn type_names(ty: &str) -> Vec<String> {
+    ty.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|w| w.chars().next().is_some_and(char::is_uppercase))
+        .map(str::to_string)
+        .collect()
 }
 
 /// `App` for methods of `impl App` / `impl<T> Trait for App<T>`.
@@ -717,17 +773,21 @@ impl Walker<'_> {
                 continue;
             }
             let mut handled = false;
-            // Methods called on it.
+            // Methods called on it (or on one of its fields: `g.stand.lock()`).
             for call in &node.calls {
-                if call.receiver.as_deref().is_some_and(|r| ours(r, &bindings))
-                    && call.field.is_none()
-                {
-                    let op = call.path.first().cloned();
-                    if op.as_deref() != Some("clone") {
-                        self.sites(f, id, op, out);
-                        handled = true;
-                    }
+                if !call.receiver.as_deref().is_some_and(|r| ours(r, &bindings)) {
+                    continue;
                 }
+                let method = call.path.first().cloned();
+                if call.field.is_none() && method.as_deref() == Some("clone") {
+                    continue;
+                }
+                let op = match (&call.field, method) {
+                    (Some(f), Some(m)) => Some(format!("{f}.{m}")),
+                    (_, m) => m,
+                };
+                self.sites(f, id, op, out);
+                handled = true;
             }
             // Handed to a function.
             for (ci, call) in node.calls.iter().enumerate() {
@@ -970,6 +1030,55 @@ impl Walker<'_> {
                     program.shared.push(shared);
                 }
             }
+            // Shared state from constructors returning `Arc<…>` (`Geteilt::neu()`).
+            if let Some(flow) = self.facts.flow(id) {
+                for (n, node) in body.nodes.iter().enumerate() {
+                    let nid = NodeId(n as u32);
+                    if node.defs.len() != 1
+                        || c.shared.iter().any(|g| g.def == nid)
+                        || creators(nid).is_empty()
+                    {
+                        continue;
+                    }
+                    let kind = node.calls.iter().enumerate().find_map(|(ci, _)| {
+                        let callee = self.project.function(self.graph.callee(id, nid, ci)?);
+                        shared_return_kind(callee.sig.ret.as_deref()?, &callee.owner)
+                    });
+                    let Some(kind) = kind else { continue };
+                    let Some(b) = flow
+                        .bindings
+                        .iter()
+                        .rposition(|b| b.def == nid && b.name == node.defs[0].name)
+                    else {
+                        continue;
+                    };
+                    let mut users = Vec::new();
+                    self.follow(
+                        id,
+                        &[b],
+                        0,
+                        &mut Seen::default(),
+                        &mut users,
+                        &mut Vec::new(),
+                    );
+                    let shared = SharedComm {
+                        name: node.defs[0].name.clone(),
+                        kind: kind.clone(),
+                        site: (id, nid),
+                        users,
+                    };
+                    let threads = shared.threads();
+                    if threads.len() >= 2 {
+                        program.resources.push(Resource {
+                            name: shared.name.clone(),
+                            kind,
+                            site: (id, nid),
+                            users: threads.into_iter().collect(),
+                        });
+                        program.shared.push(shared);
+                    }
+                }
+            }
             // Join handles of threads started here.
             for (si, s) in c.spawns.iter().enumerate() {
                 let Some(&thread) = self.spawn_thread.get(&(id, si)) else {
@@ -1014,6 +1123,26 @@ impl Walker<'_> {
 struct Seen {
     bindings: HashSet<(FnId, usize)>,
     fields: HashSet<(String, String)>,
+}
+
+/// `Arc<Mutex<T>>` -> "Mutex", `Arc<Self>` in `impl Geteilt` -> "Arc<Geteilt>".
+fn shared_return_kind(ret: &str, owner: &FnOwner) -> Option<String> {
+    let start = ret.find("Arc<")? + 4;
+    let inner = ret.get(start..ret.rfind('>')?)?.trim();
+    for kind in ["Mutex", "RwLock", "Condvar"] {
+        if inner.starts_with(kind) {
+            return Some(kind.into());
+        }
+    }
+    if inner.starts_with("Atomic") {
+        return Some("Atomic".into());
+    }
+    let inner = if inner == "Self" {
+        self_type(owner)?
+    } else {
+        inner
+    };
+    Some(format!("Arc<{inner}>"))
 }
 
 /// The node hands its value to the caller (`return x`, or the function's tail).

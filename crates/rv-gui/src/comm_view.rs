@@ -28,7 +28,8 @@ pub struct CommView {
 
 /// Operations that change shared state (or may: unknown methods).
 fn writes(op: &str) -> bool {
-    !matches!(op, "load" | "read" | "try_read" | "is_poisoned") && !op.starts_with("stored in")
+    let method = op.rsplit('.').next().unwrap_or(op);
+    !matches!(method, "load" | "read" | "try_read" | "is_poisoned") && !op.starts_with("stored in")
 }
 
 fn thread_label(program: &Program, t: usize) -> String {
@@ -43,6 +44,8 @@ fn semantics(op: Option<&str>, bounded: bool) -> String {
     if let Some(field) = op.strip_prefix("stored in ") {
         return format!("kept in the field {field}; its methods use it");
     }
+    // `stand.lock`: the operation is on a field of the shared object.
+    let op = op.rsplit('.').next().unwrap_or(op);
     let s = match op {
         "send" | "blocking_send" | "send_blocking" if bounded => {
             "sends; blocks while the channel is full"
@@ -181,73 +184,68 @@ impl CommView {
             ui.label(RichText::new("■ join (column waits for row to end)").color(JOIN));
         });
         ui.separator();
-        let width = ui.available_width();
-        ui.horizontal_top(|ui| {
-            // Matrix.
-            ui.allocate_ui(egui::vec2(width * 0.55, ui.available_height()), |ui| {
-                // Chips must not wrap into narrow columns.
-                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                egui::ScrollArea::both()
-                    .id_salt("comm_matrix")
+        // Details in a panel on the right whose width the user can drag;
+        // the matrix takes the rest.
+        let total = ui.available_width();
+        egui::Panel::right("comm_details_panel")
+            .resizable(true)
+            .default_size(total * 0.4)
+            .size_range(220.0..=(total - 150.0).max(240.0))
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                egui::ScrollArea::vertical()
+                    .id_salt("comm_details")
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        egui::Grid::new("comm_grid")
-                            .striped(true)
-                            .spacing([10.0, 6.0])
-                            .show(ui, |ui| {
-                                ui.weak("from \\ to");
-                                for &c in &threads {
-                                    ui.strong(format!("#{c}"))
-                                        .on_hover_text(program.threads[c].title());
-                                }
-                                ui.end_row();
-                                for &r in &threads {
-                                    ui.label(RichText::new(thread_label(program, r)).strong());
-                                    for &c in &threads {
-                                        if r == c {
-                                            ui.weak("·");
-                                            continue;
-                                        }
-                                        ui.vertical(|ui| {
-                                            for &comm in cells.get(&(r, c)).into_iter().flatten() {
-                                                let (text, color) = chip(program, comm);
-                                                let selected = self.selected == Some(comm);
-                                                let label =
-                                                    RichText::new(text).color(color).monospace();
-                                                if ui
-                                                    .selectable_label(selected, label)
-                                                    .on_hover_text(chip_tooltip(
-                                                        project, program, comm,
-                                                    ))
-                                                    .clicked()
-                                                {
-                                                    self.selected = Some(comm);
-                                                }
-                                            }
-                                        });
-                                    }
-                                    ui.end_row();
-                                }
-                            });
+                        if let Some(a) = self.details(ui, project, program) {
+                            action = a;
+                        }
                     });
             });
-            ui.separator();
-            // Details.
-            // The row is horizontal; the details are a column.
-            ui.allocate_ui_with_layout(
-                egui::vec2(ui.available_width(), ui.available_height()),
-                egui::Layout::top_down(egui::Align::Min),
-                |ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt("comm_details")
-                        .auto_shrink([false, false])
+        egui::CentralPanel::no_frame().show(ui, |ui| {
+            // Chips must not wrap into narrow columns.
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+            egui::ScrollArea::both()
+                .id_salt("comm_matrix")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    egui::Grid::new("comm_grid")
+                        .striped(true)
+                        .spacing([10.0, 6.0])
                         .show(ui, |ui| {
-                            if let Some(a) = self.details(ui, project, program) {
-                                action = a;
+                            ui.weak("from \\ to");
+                            for &c in &threads {
+                                ui.strong(format!("#{c}"))
+                                    .on_hover_text(program.threads[c].title());
+                            }
+                            ui.end_row();
+                            for &r in &threads {
+                                ui.label(RichText::new(thread_label(program, r)).strong());
+                                for &c in &threads {
+                                    if r == c {
+                                        ui.weak("·");
+                                        continue;
+                                    }
+                                    ui.vertical(|ui| {
+                                        for &comm in cells.get(&(r, c)).into_iter().flatten() {
+                                            let (text, color) = chip(program, comm);
+                                            let selected = self.selected == Some(comm);
+                                            let label =
+                                                RichText::new(text).color(color).monospace();
+                                            if ui
+                                                .selectable_label(selected, label)
+                                                .on_hover_text(chip_tooltip(project, program, comm))
+                                                .clicked()
+                                            {
+                                                self.selected = Some(comm);
+                                            }
+                                        }
+                                    });
+                                }
+                                ui.end_row();
                             }
                         });
-                },
-            );
+                });
         });
         action
     }
