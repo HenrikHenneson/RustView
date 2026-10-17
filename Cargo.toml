@@ -1,0 +1,30 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+rv-ir  = { path = "crates/rv-ir" }
+rv-syn = { path = "crates/rv-syn" }
+rv-gui = { path = "crates/rv-gui" }
+
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+clap = { version = "4.6", features = ["derive"] }
+syn = { version = "3", features = ["full", "visit"] }
+proc-macro2 = { version = "1.0.107", features = ["span-locations"] }
+cargo_metadata = "0.23"
+walkdir = "2.5"
+eframe = { version = "0.37", features = ["persistence"] }
+egui = "0.37"
+syntect = "5.3"
+notify = "8"
+notify-debouncer-full = "0.6"
+rfd = "0.17"
+windows-sys = { version = "0.61", features = ["Win32_System_Console"] }

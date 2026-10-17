@@ -1,0 +1,19 @@
+[package]
+name = "rv-gui"
+description = "egui front end of RustView"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+rv-ir.workspace = true
+rv-syn.workspace = true
+anyhow.workspace = true
+log.workspace = true
+eframe.workspace = true
+egui.workspace = true
+syntect.workspace = true
+notify.workspace = true
+notify-debouncer-full.workspace = true
+rfd.workspace = true

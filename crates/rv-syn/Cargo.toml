@@ -1,0 +1,16 @@
+[package]
+name = "rv-syn"
+description = "syn-based frontend: loads a Cargo project and lowers it to rv-ir"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+rv-ir.workspace = true
+anyhow.workspace = true
+log.workspace = true
+syn.workspace = true
+proc-macro2.workspace = true
+cargo_metadata.workspace = true
+walkdir.workspace = true

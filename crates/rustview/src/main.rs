@@ -1,0 +1,51 @@
+//! RustView: LabVIEW-style structural view of Rust code (analysis and display only).
+
+// Release builds started by double click should not open a console window.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+use std::path::PathBuf;
+
+use clap::Parser;
+
+#[derive(Parser)]
+#[command(version, about)]
+struct Cli {
+    /// Cargo project directory (package or workspace) or a single .rs file.
+    /// Without it, RustView starts with the project selection screen.
+    path: Option<PathBuf>,
+
+    /// Command used to open a location in an editor. Placeholders: {file} {line} {col}.
+    #[arg(long, default_value = rv_gui::DEFAULT_EDITOR)]
+    editor: String,
+
+    /// Select this function after loading, e.g. `ec_task::ethercat_task`.
+    #[arg(long)]
+    select: Option<String>,
+}
+
+fn main() -> anyhow::Result<()> {
+    attach_parent_console();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+    let cli = Cli::parse();
+    let editor = rv_gui::EditorCommand::parse(&cli.editor)?;
+    rv_gui::run(rv_gui::Options {
+        path: cli.path,
+        editor,
+        select: cli.select,
+    })
+    .map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+/// With the "windows" subsystem there is no console. When started from a
+/// terminal, reuse that one so `--help` and log output still show up.
+#[cfg(windows)]
+fn attach_parent_console() {
+    use windows_sys::Win32::System::Console::{ATTACH_PARENT_PROCESS, AttachConsole};
+    // Fails harmlessly when there is no parent console (double click).
+    unsafe {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+}
+
+#[cfg(not(windows))]
+fn attach_parent_console() {}

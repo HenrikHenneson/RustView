@@ -1,0 +1,16 @@
+[package]
+name = "rustview"
+description = "LabVIEW-style structural view of Rust code (analysis and display only)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+rv-gui.workspace = true
+anyhow.workspace = true
+env_logger.workspace = true
+clap.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true

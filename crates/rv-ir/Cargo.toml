@@ -1,0 +1,9 @@
+[package]
+name = "rv-ir"
+description = "Backend-independent intermediate representation for RustView"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
