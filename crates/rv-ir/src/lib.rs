@@ -55,6 +55,8 @@ pub struct Project {
     pub diagnostics: Vec<Diagnostic>,
     /// `type Name = Target;` items of the whole project (name -> target as written).
     pub type_aliases: std::collections::HashMap<String, String>,
+    /// Named fields of the project's structs: struct name -> (field, type as written).
+    pub struct_fields: std::collections::HashMap<String, Vec<(String, String)>>,
 }
 
 impl Project {
