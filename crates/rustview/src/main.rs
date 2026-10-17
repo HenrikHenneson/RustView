@@ -35,12 +35,24 @@ struct Cli {
     /// Show statements as data flow of their expressions from the start.
     #[arg(long)]
     expressions: bool,
+
+    /// Write SVG and PNG files of the overviews (and of the `--select`ed
+    /// function) to this directory instead of opening a window.
+    #[arg(long, value_name = "DIR")]
+    export: Option<PathBuf>,
 }
 
 fn main() -> anyhow::Result<()> {
     attach_parent_console();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let cli = Cli::parse();
+    if let Some(dir) = &cli.export {
+        let path = cli.path.clone().unwrap_or_else(|| PathBuf::from("."));
+        for file in rv_gui::export_all(&path, dir, cli.select.as_deref())? {
+            println!("{}", file.display());
+        }
+        return Ok(());
+    }
     let editor = rv_gui::EditorCommand::parse(&cli.editor)?;
     rv_gui::run(rv_gui::Options {
         path: cli.path,

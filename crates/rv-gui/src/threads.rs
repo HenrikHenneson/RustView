@@ -15,6 +15,8 @@ pub enum ThreadsAction {
     /// Show this node in the diagram of this function.
     ShowNode(FnId, NodeId),
     ShowFn(FnId),
+    /// Status message (e.g. after an export).
+    Message(String),
 }
 
 #[derive(Default)]
@@ -134,6 +136,7 @@ impl ThreadsView {
         }
         self.entry = self.entry.min(data.entries.len() - 1);
 
+        let mut export = false;
         ui.horizontal_wrapped(|ui| {
             let current = &project.function(data.entries[self.entry]).qual_path;
             ui.label("program:");
@@ -154,6 +157,13 @@ impl ThreadsView {
                         }
                     }
                 });
+            if ui
+                .button("Export…")
+                .on_hover_text("Save this view as SVG or PNG")
+                .clicked()
+            {
+                export = true;
+            }
             if self.mode == Mode::Program {
                 if ui.button("Fit").clicked() {
                     self.fit = true;
@@ -194,6 +204,23 @@ impl ThreadsView {
             });
         }
         ui.separator();
+        if export {
+            let base = crate::export::file_name(&project.function(data.entries[entry]).qual_path);
+            let (name, svg) = if self.mode == Mode::Communication {
+                (
+                    format!("{base}_communication"),
+                    crate::comm_view::svg(program),
+                )
+            } else {
+                (
+                    format!("{base}_threads"),
+                    crate::program_view::svg(project, program, layout),
+                )
+            };
+            if let Some(msg) = crate::export::export(&name, || svg) {
+                action = ThreadsAction::Message(msg);
+            }
+        }
         if self.mode == Mode::Communication {
             return match self.comm.ui(ui, project, program) {
                 ThreadsAction::None => action,

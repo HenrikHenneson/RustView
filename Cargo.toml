@@ -30,4 +30,5 @@ syntect = "5.3"
 notify = "8"
 notify-debouncer-full = "0.6"
 rfd = "0.17"
+resvg = "0.48"
 windows-sys = { version = "0.61", features = ["Win32_System_Console"] }

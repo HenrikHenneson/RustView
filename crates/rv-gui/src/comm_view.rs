@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use egui::{Color32, RichText, Ui};
+use egui::{Color32, Rect, RichText, Ui};
 use rv_analysis::{Program, Site};
 use rv_ir::Project;
 
@@ -115,6 +115,43 @@ fn cells(program: &Program) -> BTreeMap<(usize, usize), BTreeSet<CommRef>> {
     cells
 }
 
+/// Lines between the matrix cells and a gray diagonal (a thread with itself).
+fn draw_grid_lines(ui: &Ui, cells: &[(usize, usize, Rect)], n: usize) {
+    if cells.is_empty() {
+        return;
+    }
+    let mut col = vec![(f32::INFINITY, f32::NEG_INFINITY); n];
+    let mut row = vec![(f32::INFINITY, f32::NEG_INFINITY); n];
+    for &(r, c, rect) in cells {
+        col[c] = (col[c].0.min(rect.min.x), col[c].1.max(rect.max.x));
+        row[r] = (row[r].0.min(rect.min.y), row[r].1.max(rect.max.y));
+    }
+    // Boundaries halfway between neighboring columns / rows.
+    let bounds = |v: &[(f32, f32)]| -> Vec<f32> {
+        let mut b = vec![v[0].0 - 6.0];
+        for w in v.windows(2) {
+            b.push((w[0].1 + w[1].0) / 2.0);
+        }
+        b.push(v[v.len() - 1].1 + 6.0);
+        b
+    };
+    let (xs, ys) = (bounds(&col), bounds(&row));
+    let painter = ui.painter();
+    let gray = ui.visuals().weak_text_color().gamma_multiply(0.25);
+    for i in 1..n {
+        // The thread with itself.
+        let r = Rect::from_min_max(egui::pos2(xs[i], ys[i]), egui::pos2(xs[i + 1], ys[i + 1]));
+        painter.rect_filled(r, 0.0, gray);
+    }
+    let stroke = egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color);
+    for &x in &xs {
+        painter.line_segment([egui::pos2(x, ys[0]), egui::pos2(x, ys[n])], stroke);
+    }
+    for &y in &ys {
+        painter.line_segment([egui::pos2(xs[0], y), egui::pos2(xs[n], y)], stroke);
+    }
+}
+
 /// `#0, #2`
 fn thread_set(set: impl IntoIterator<Item = usize>) -> String {
     let v: BTreeSet<usize> = set.into_iter().collect();
@@ -209,42 +246,53 @@ impl CommView {
                 .id_salt("comm_matrix")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
+                    // Cell rects by (row, column), 0 = header; for the lines drawn afterwards.
+                    let mut cell_rects: Vec<(usize, usize, Rect)> = Vec::new();
                     egui::Grid::new("comm_grid")
-                        .striped(true)
-                        .spacing([10.0, 6.0])
+                        .spacing([14.0, 8.0])
                         .show(ui, |ui| {
-                            ui.weak("from \\ to");
-                            for &c in &threads {
-                                ui.strong(format!("#{c}"))
-                                    .on_hover_text(program.threads[c].title());
+                            let r = ui.weak("from → to").rect;
+                            cell_rects.push((0, 0, r));
+                            for (ci, &c) in threads.iter().enumerate() {
+                                let r = ui
+                                    .strong(format!("#{c}"))
+                                    .on_hover_text(program.threads[c].title())
+                                    .rect;
+                                cell_rects.push((0, ci + 1, r));
                             }
                             ui.end_row();
-                            for &r in &threads {
-                                ui.label(RichText::new(thread_label(program, r)).strong());
-                                for &c in &threads {
-                                    if r == c {
-                                        ui.weak("·");
-                                        continue;
-                                    }
-                                    ui.vertical(|ui| {
-                                        for &comm in cells.get(&(r, c)).into_iter().flatten() {
-                                            let (text, color) = chip(program, comm);
-                                            let selected = self.selected == Some(comm);
-                                            let label =
-                                                RichText::new(text).color(color).monospace();
-                                            if ui
-                                                .selectable_label(selected, label)
-                                                .on_hover_text(chip_tooltip(project, program, comm))
-                                                .clicked()
-                                            {
-                                                self.selected = Some(comm);
+                            for (ri, &r) in threads.iter().enumerate() {
+                                let rect = ui
+                                    .label(RichText::new(thread_label(program, r)).strong())
+                                    .rect;
+                                cell_rects.push((ri + 1, 0, rect));
+                                for (ci, &c) in threads.iter().enumerate() {
+                                    let rect = ui
+                                        .vertical(|ui| {
+                                            for &comm in cells.get(&(r, c)).into_iter().flatten() {
+                                                let (text, color) = chip(program, comm);
+                                                let selected = self.selected == Some(comm);
+                                                let label =
+                                                    RichText::new(text).color(color).monospace();
+                                                if ui
+                                                    .selectable_label(selected, label)
+                                                    .on_hover_text(chip_tooltip(
+                                                        project, program, comm,
+                                                    ))
+                                                    .clicked()
+                                                {
+                                                    self.selected = Some(comm);
+                                                }
                                             }
-                                        }
-                                    });
+                                        })
+                                        .response
+                                        .rect;
+                                    cell_rects.push((ri + 1, ci + 1, rect));
                                 }
                                 ui.end_row();
                             }
                         });
+                    draw_grid_lines(ui, &cell_rects, threads.len() + 1);
                 });
         });
         action
@@ -409,4 +457,113 @@ fn site_link(
     ui.link(format!("created in {}:{line}", func.qual_path))
         .clicked()
         .then_some(ThreadsAction::ShowNode(f, node))
+}
+
+/// The communication matrix as SVG table.
+pub fn svg(program: &Program) -> String {
+    use crate::export::Svg;
+    use egui::{pos2, vec2};
+    const CH: f32 = 7.0;
+    const LINE: f32 = 16.0;
+    const PAD: f32 = 8.0;
+    let cells = cells(program);
+    let threads: Vec<usize> = cells
+        .keys()
+        .flat_map(|&(a, b)| [a, b])
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let head_w = threads
+        .iter()
+        .map(|&t| thread_label(program, t).chars().count())
+        .max()
+        .unwrap_or(10) as f32
+        * CH
+        + 2.0 * PAD;
+    let col_w: Vec<f32> = threads
+        .iter()
+        .map(|&c| {
+            let widest = threads
+                .iter()
+                .flat_map(|&r| cells.get(&(r, c)).into_iter().flatten())
+                .map(|&x| chip(program, x).0.chars().count())
+                .max()
+                .unwrap_or(3);
+            widest.max(3) as f32 * CH + 2.0 * PAD
+        })
+        .collect();
+    let row_h: Vec<f32> = threads
+        .iter()
+        .map(|&r| {
+            let most = threads
+                .iter()
+                .map(|&c| cells.get(&(r, c)).map_or(0, |s| s.len()))
+                .max()
+                .unwrap_or(0);
+            most.max(1) as f32 * LINE + PAD
+        })
+        .collect();
+    let width = head_w + col_w.iter().sum::<f32>();
+    let height = LINE + PAD + row_h.iter().sum::<f32>();
+    let mut svg = Svg::new(vec2(width, height));
+    let dark = Color32::from_gray(30);
+    let mut x = head_w;
+    for (i, &c) in threads.iter().enumerate() {
+        svg.text(
+            pos2(x + PAD, 4.0),
+            &format!("#{c}"),
+            12.0,
+            dark,
+            false,
+            true,
+        );
+        x += col_w[i];
+    }
+    let mut y = LINE + PAD;
+    for (ri, &r) in threads.iter().enumerate() {
+        svg.text(
+            pos2(PAD, y + 4.0),
+            &thread_label(program, r),
+            12.0,
+            dark,
+            false,
+            true,
+        );
+        let mut x = head_w;
+        for (ci, &c) in threads.iter().enumerate() {
+            if r == c {
+                let cell = Rect::from_min_size(pos2(x, y), vec2(col_w[ci], row_h[ri]));
+                svg.rect(cell, Color32::from_gray(225), None, 0.0);
+            }
+            for (k, &comm) in cells.get(&(r, c)).into_iter().flatten().enumerate() {
+                let (text, color) = chip(program, comm);
+                svg.text(
+                    pos2(x + PAD, y + 4.0 + k as f32 * LINE),
+                    &text,
+                    12.0,
+                    color,
+                    true,
+                    false,
+                );
+            }
+            x += col_w[ci];
+        }
+        y += row_h[ri];
+    }
+    let gray = Color32::from_gray(200);
+    let mut xs = vec![0.0, head_w];
+    for w in &col_w {
+        xs.push(xs[xs.len() - 1] + w);
+    }
+    let mut ys = vec![0.0, LINE + PAD];
+    for h in &row_h {
+        ys.push(ys[ys.len() - 1] + h);
+    }
+    for &x in &xs {
+        svg.polyline(&[pos2(x, 0.0), pos2(x, height)], 1.0, gray, None);
+    }
+    for &y in &ys {
+        svg.polyline(&[pos2(0.0, y), pos2(width, y)], 1.0, gray, None);
+    }
+    svg.finish()
 }

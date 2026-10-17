@@ -21,6 +21,8 @@ const THREADS: Color32 = Color32::from_rgb(0, 160, 120);
 pub enum CallGraphAction {
     None,
     ShowFn(FnId),
+    /// Status message (e.g. after an export).
+    Message(String),
 }
 
 #[derive(Default)]
@@ -102,6 +104,7 @@ impl CallGraphView {
 
         // Toolbar.
         let mut changed = false;
+        let mut export = false;
         ui.horizontal_wrapped(|ui| {
             ui.label("crate:");
             let mut ci = crate_index;
@@ -131,6 +134,14 @@ impl CallGraphView {
             if self.focus.is_none() && ui.button("Fit").clicked() {
                 self.fit = true;
             }
+            if self.focus.is_none()
+                && ui
+                    .button("Export…")
+                    .on_hover_text("Save the module graph as SVG or PNG")
+                    .clicked()
+            {
+                export = true;
+            }
             ui.weak("· double click a module: its functions · drag: move · Ctrl+wheel: zoom");
         });
         if changed {
@@ -153,20 +164,8 @@ impl CallGraphView {
             },
         };
         if self.graph.as_ref().is_none_or(|(k, ..)| *k != key) {
-            let g = rv_analysis::module_graph(
-                project,
-                &data.calls,
-                &data.facts,
-                &crate_name,
-                key.depth,
-            );
-            let sizes: Vec<Vec2> = g
-                .nodes
-                .iter()
-                .map(|n| node_size(&node_lines(n, &crate_name)))
-                .collect();
-            let edges: Vec<(usize, usize)> = g.edges.iter().map(|e| (e.from, e.to)).collect();
-            let l = layered(&sizes, &edges, vec2(90.0, 16.0));
+            let (g, l, sizes) =
+                module_layout(project, &data.calls, &data.facts, &crate_name, key.depth);
             self.graph = Some((key, g, l, sizes));
             self.fit = true;
         }
@@ -180,6 +179,12 @@ impl CallGraphView {
                 .position(|n| n.key == wanted || n.key.ends_with(&suffix));
         }
         ui.separator();
+        if export {
+            let name = format!("{}_modules", crate::export::file_name(&crate_name));
+            if let Some(msg) = crate::export::export(&name, || self.svg().unwrap_or_default()) {
+                return CallGraphAction::Message(msg);
+            }
+        }
         match self.focus {
             Some(node) => self.focus_ui(ui, project, &crate_name, node),
             None => self.overview_ui(ui, project, &crate_name),
@@ -637,4 +642,75 @@ fn dist(p: Pos2, a: Pos2, b: Pos2) -> f32 {
         0.0
     };
     (p - (a + ab * t)).length()
+}
+
+impl CallGraphView {
+    /// The module graph (as laid out) as SVG in light colors.
+    fn svg(&self) -> Option<String> {
+        let (key, g, l, sizes) = self.graph.as_ref()?;
+        Some(module_svg(&key.crate_name, g, l, sizes))
+    }
+}
+
+/// Module graph of a crate with its layered layout and box sizes.
+pub(crate) fn module_layout(
+    project: &Project,
+    calls: &CallGraph,
+    facts: &Facts,
+    crate_name: &str,
+    depth: usize,
+) -> (ModuleGraph, LayeredLayout, Vec<Vec2>) {
+    let g = rv_analysis::module_graph(project, calls, facts, crate_name, depth);
+    let sizes: Vec<Vec2> = g
+        .nodes
+        .iter()
+        .map(|n| node_size(&node_lines(n, crate_name)))
+        .collect();
+    let edges: Vec<(usize, usize)> = g.edges.iter().map(|e| (e.from, e.to)).collect();
+    let l = layered(&sizes, &edges, vec2(90.0, 16.0));
+    (g, l, sizes)
+}
+
+/// The module graph as SVG in light colors.
+pub(crate) fn module_svg(
+    crate_name: &str,
+    g: &ModuleGraph,
+    l: &LayeredLayout,
+    sizes: &[Vec2],
+) -> String {
+    use crate::export::Svg;
+    let box_of = |i: usize| Rect::from_min_size(l.positions[i], sizes[i]);
+    let mut svg = Svg::new(l.size + vec2(80.0, 80.0));
+    for e in &g.edges {
+        let pts = sample(&connect(box_of(e.from), box_of(e.to)));
+        let width = 1.0 + (e.calls.len() as f32).log2();
+        svg.arrow(&pts, width, Color32::from_gray(150), None);
+    }
+    for (i, n) in g.nodes.iter().enumerate() {
+        let (width, border) = if n.spawns > 0 {
+            (2.0, THREADS)
+        } else {
+            (1.0, Color32::from_gray(90))
+        };
+        svg.rect(box_of(i), Color32::WHITE, Some((width, border)), 5.0);
+        for (k, (text, strong)) in node_lines(n, crate_name).iter().enumerate() {
+            let color = if *strong {
+                Color32::from_gray(20)
+            } else if text.starts_with('‖') {
+                THREADS
+            } else {
+                Color32::from_gray(120)
+            };
+            let size = if *strong { 12.5 } else { 11.5 };
+            svg.text(
+                box_of(i).min + vec2(PAD, PAD + k as f32 * LINE),
+                text,
+                size,
+                color,
+                *strong,
+                false,
+            );
+        }
+    }
+    svg.finish()
 }
