@@ -4,14 +4,54 @@ LabVIEW-style structural view of Rust code: nesting, data flow and
 parallelism of a program at a glance. Analysis and display only — no
 editing, no code generation.
 
+## Why
+
+Rust projects grow fast — especially with LLM assistance, where a working
+program with threads, channels, shared state and deeply nested control flow
+can appear in an afternoon. Writing the code is no longer the bottleneck;
+understanding it is. Reading file after file does not tell you which thread
+runs which function, who sends to whom, or where a loop really ends.
+
+RustView reads the existing code and draws its structure the way LabVIEW
+shows a program: nested frames for loops and branches, wires for data flow,
+parallel lanes for threads, and a whole-program view of how the threads talk
+to each other. It is meant for navigating code you did not (fully) write
+yourself — to see the shape first and then jump to the right line.
+
+## Install
+
+Prebuilt binaries for Windows, Linux and macOS are attached to the
+[releases](../../releases). To build from source (Rust 1.95 or newer):
+
 ```
-cargo run --release -p rustview -- [<cargo project dir | file.rs>] [--select <fn path>] [--editor "<cmd>"]
+cargo install --locked --git https://github.com/HenrikHenneson/RustView rustview
+```
+
+or, in a clone, `cargo build --release` (the binary is `target/release/rustview`).
+
+Platform notes:
+
+- **Windows:** the release binary has no console window and can be started by
+  double click; started from a terminal it still prints `--help` and logs.
+- **Linux:** needs X11 or Wayland with OpenGL. The *Open Project Folder…*
+  dialog uses the XDG desktop portal (`xdg-desktop-portal` plus a backend such
+  as `-gtk` or `-kde`); without it, pass the path on the command line or drop
+  the folder onto the window. Building needs `libxkbcommon-dev`,
+  `libwayland-dev` and the `libxcb-*` development packages.
+- **macOS:** the binaries are not signed; on first start use right click →
+  *Open* (or `xattr -d com.apple.quarantine rustview`).
+- `cargo` must be on the `PATH` (RustView runs `cargo metadata` to find the
+  packages of a workspace). The default editor command is VS Code's `code`.
+
+## Usage
+
+```
+rustview [<cargo project dir | file.rs>] [--select <fn path>] [--editor "<cmd>"]
 ```
 
 Without a path RustView starts with a project selection screen. Projects can
 also be opened via *File → Open Project Folder…* (Ctrl+O), *File → Recent*, or
-by dropping a folder or `.rs` file onto the window. The release binary
-(`target/release/rustview.exe`) can be started by double click.
+by dropping a folder or `.rs` file onto the window.
 
 - `--threads [graph|communication|functions]` starts with the thread overview.
 - `--callgraph [module]` starts with the module call graph.
@@ -74,6 +114,12 @@ code. Channel ends and shared objects are followed through clones, call
 arguments, return values and struct fields (`App { cmd_tx }` →
 `self.cmd_tx.send(..)` in `App`'s methods).
 
+The *Call graph* tab (or `--callgraph [module]`) shows the calls between
+modules of a crate, laid out in layers (callers left, callees right; modules
+that start threads are marked). Grouping depth is selectable. Double-clicking
+a module lists its functions with who calls them and what they call; the
+names lead to the function diagrams.
+
 ## Crates
 
 | crate      | role |
@@ -85,14 +131,13 @@ arguments, return values and struct fields (`App { cmd_tx }` →
 | `rv-gui`   | egui application |
 | `rustview` | binary / CLI |
 
-The *Call graph* tab (or `--callgraph [module]`) shows the calls between
-modules of a crate, laid out in layers (callers left, callees right; modules
-that start threads are marked). Grouping depth is selectable. Double-clicking
-a module lists its functions with who calls them and what they call; the
-names lead to the function diagrams.
-
 ## Limits
 
 Purely syntactic: macros are not expanded, names and types are not
 resolved, `cfg` attributes are not evaluated. Test code (`#[cfg(test)]`,
 `#[test]`, `tests/`, benches, examples) is counted, not shown.
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
+[MIT license](LICENSE-MIT) at your option.
