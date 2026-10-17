@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 mod app;
 mod code_view;
+mod comm_view;
 mod diagram;
 mod editor;
 mod highlight;
@@ -21,8 +22,9 @@ pub struct Options {
     pub editor: EditorCommand,
     /// Function to select after loading (qualified path or a `::`-suffix of it).
     pub select: Option<String>,
-    /// Start with the project-wide thread overview.
-    pub threads: bool,
+    /// Start with the thread overview in this mode (`graph`,
+    /// `communication`, `functions`).
+    pub threads: Option<String>,
 }
 
 pub fn run(options: Options) -> eframe::Result {

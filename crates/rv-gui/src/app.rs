@@ -80,8 +80,8 @@ impl App {
             load_time: Duration::ZERO,
             generation: 0,
             diagram: DiagramView::default(),
-            threads: ThreadsView::default(),
-            center: if options.threads {
+            threads: ThreadsView::starting_in(options.threads.as_deref()),
+            center: if options.threads.is_some() {
                 CenterTab::Threads
             } else {
                 CenterTab::Diagram

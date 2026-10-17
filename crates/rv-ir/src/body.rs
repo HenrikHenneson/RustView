@@ -65,6 +65,11 @@ pub struct CallSite {
     pub path: Vec<String>,
     /// Local variable a method chain starts at (`tx` in `tx.send(x)`).
     pub receiver: Option<String>,
+    /// First field accessed on the receiver: `cmd_tx` in `self.cmd_tx.send(x)`.
+    pub field: Option<String>,
+    /// Generic arguments of a function call as written (`RawSample` in
+    /// `sync_channel::<RawSample>(256)`).
+    pub turbofish: Option<String>,
     /// First string literal passed to a link of the chain: `("name", "ec-task")`.
     pub literals: Vec<(String, String)>,
     /// Closures and `async` blocks passed as arguments (lowered as structures).
@@ -74,6 +79,8 @@ pub struct CallSite {
     /// Arguments by position: the local variable if the argument is just a
     /// variable (`x`, `&x`, `&mut x`, `x.clone()`), otherwise `None`.
     pub args: Vec<Option<String>>,
+    /// Arguments as text (shortened), e.g. the capacity of a channel.
+    pub arg_texts: Vec<String>,
     pub span: Span,
 }
 
@@ -119,6 +126,9 @@ pub struct VarUse {
     pub mode: UseMode,
     /// `false` if guessed from the tokens of a macro that is not understood.
     pub certain: bool,
+    /// The variable is stored in a struct field: `(struct, field)` for
+    /// `App { tx }` / `App { tx: x }` / `Self { tx }`.
+    pub stored_in: Option<(String, String)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

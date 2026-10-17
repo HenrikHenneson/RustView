@@ -744,6 +744,17 @@ impl<'l, 'a> Embed<'l, 'a> {
     }
 
     fn use_name(&mut self, name: String, span: proc_macro2::Span, mode: UseMode, certain: bool) {
+        self.use_full(name, span, mode, certain, None);
+    }
+
+    fn use_full(
+        &mut self,
+        name: String,
+        span: proc_macro2::Span,
+        mode: UseMode,
+        certain: bool,
+        stored_in: Option<(String, String)>,
+    ) {
         if self.shadow.iter().any(|s| s.contains(&name)) {
             return;
         }
@@ -753,6 +764,7 @@ impl<'l, 'a> Embed<'l, 'a> {
             span,
             mode,
             certain,
+            stored_in,
         });
     }
 
@@ -782,6 +794,8 @@ impl<'l, 'a> Embed<'l, 'a> {
     fn call_args<'e>(&mut self, args: impl Iterator<Item = &'e syn::Expr>, call: &mut CallSite) {
         for arg in args {
             call.args.push(arg_local(arg));
+            call.arg_texts
+                .push(short(&one_line(&self.lower.p.text_of(arg.span())), 40));
             let arg = unwrap(arg);
             if is_structure(arg) {
                 let parent = self.lower.container_node(&mut self.container);
@@ -802,10 +816,13 @@ impl<'l, 'a> Embed<'l, 'a> {
             kind,
             path,
             receiver: None,
+            field: None,
+            turbofish: None,
             literals: Vec::new(),
             structures: Vec::new(),
             inline_closures: Vec::new(),
             args: Vec::new(),
+            arg_texts: Vec::new(),
             span: self.lower.span(span),
         }
     }
@@ -914,6 +931,7 @@ impl<'ast> Visit<'ast> for Embed<'_, '_> {
                 }
                 let mut call = self.new_call(CallKind::Method, path, m.method.span());
                 call.receiver = receiver;
+                call.field = first_field(&m.receiver);
                 call.literals = literals;
                 self.target(&m.receiver, vars::receiver_mode(&method));
                 self.call_args(m.args.iter(), &mut call);
@@ -929,6 +947,18 @@ impl<'ast> Visit<'ast> for Embed<'_, '_> {
                     }
                 };
                 let mut call = self.new_call(CallKind::Function, path, c.func.span());
+                if let syn::Expr::Path(p) = unwrap(&c.func)
+                    && let Some(last) = p.path.segments.last()
+                    && let syn::PathArguments::AngleBracketed(g) = &last.arguments
+                {
+                    let text = self.lower.p.text_of(g.span());
+                    call.turbofish = Some(
+                        text.trim_start_matches("::")
+                            .trim_start_matches('<')
+                            .trim_end_matches('>')
+                            .to_string(),
+                    );
+                }
                 if let Some(lit) = c.args.iter().find_map(vars::first_str_lit) {
                     let name = call.name().to_string();
                     call.literals.push((name, lit));
@@ -941,6 +971,37 @@ impl<'ast> Visit<'ast> for Embed<'_, '_> {
                 }
                 self.call_args(c.args.iter(), &mut call);
                 self.push_call(call);
+                return;
+            }
+            syn::Expr::Struct(st) => {
+                let strukt = st
+                    .path
+                    .segments
+                    .last()
+                    .map(|s| s.ident.to_string())
+                    .unwrap_or_default();
+                for fv in &st.fields {
+                    let field = match &fv.member {
+                        syn::Member::Named(id) => id.to_string(),
+                        syn::Member::Unnamed(i) => i.index.to_string(),
+                    };
+                    match unwrap(&fv.expr) {
+                        syn::Expr::Path(p) if vars::local_name(p).is_some() => {
+                            let name = vars::local_name(p).expect("checked");
+                            self.use_full(
+                                name,
+                                p.span(),
+                                UseMode::Read,
+                                true,
+                                Some((strukt.clone(), field)),
+                            );
+                        }
+                        other => self.visit_expr(other),
+                    }
+                }
+                if let Some(rest) = &st.rest {
+                    self.visit_expr(rest);
+                }
                 return;
             }
             syn::Expr::Let(l) => {
@@ -1004,6 +1065,33 @@ fn chain(
         syn::Expr::Await(a) => chain(&a.base, path, literals),
         syn::Expr::Reference(r) => chain(&r.expr, path, literals),
         _ => None,
+    }
+}
+
+/// First field accessed on the root of a receiver chain:
+/// `cmd_tx` in `self.cmd_tx.send()`, `geteilt` in `self.geteilt.stand.lock()`.
+fn first_field(e: &syn::Expr) -> Option<String> {
+    match unwrap(e) {
+        syn::Expr::Field(f) => match unwrap(&f.base) {
+            syn::Expr::Path(_) => match &f.member {
+                syn::Member::Named(id) => Some(id.to_string()),
+                syn::Member::Unnamed(i) => Some(i.index.to_string()),
+            },
+            _ => first_field(&f.base),
+        },
+        syn::Expr::MethodCall(m) => first_field(&m.receiver),
+        syn::Expr::Try(t) => first_field(&t.expr),
+        syn::Expr::Await(a) => first_field(&a.base),
+        syn::Expr::Reference(r) => first_field(&r.expr),
+        _ => None,
+    }
+}
+
+fn short(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        s.chars().take(max - 1).chain(['…']).collect()
     }
 }
 
