@@ -59,6 +59,8 @@ by dropping a folder or `.rs` file onto the window.
   communication matrix and the module graph (plus the `--select`ed function
   diagram) without opening a window. In the GUI every view has an *Export…*
   button (the whole diagram, light colors).
+- `--report [FILE]` writes a compact Markdown report of the project (see
+  below) to FILE or stdout without opening a window.
 - `--select ec_task::ethercat_task` selects a function after loading
   (full qualified path or any `::`-suffix of it).
 - `--editor` defaults to `code --goto {file}:{line}:{col}`.
@@ -119,6 +121,33 @@ modules of a crate, laid out in layers (callers left, callees right; modules
 that start threads are marked). Grouping depth is selectable. Double-clicking
 a module lists its functions with who calls them and what they call; the
 names lead to the function diagrams.
+
+## Report for LLM assistants and new readers
+
+`rustview <project> --report [FILE]` writes what the diagrams show as compact
+Markdown — a map to start from when working on unfamiliar code:
+
+- packages, size, entry points
+- every thread with where it is started, what it calls and which modules it runs
+- channels (message type, capacity, sender and receiver threads) and shared
+  state, with each send/receive/lock site grouped by function and what it
+  means (blocks, polls, drops when full)
+- the module graph of each crate, the largest and most deeply nested functions
+  and the most called ones
+- a list of names to search for (thread names, channel ends, shared objects,
+  message types, key functions) and the limits of the analysis
+
+Every statement carries a `file:line`. The output is deterministic, so it can
+be committed or regenerated in a hook. For an AI coding assistant, e.g. in
+`CLAUDE.md`:
+
+```
+Before larger changes run `rustview . --report target/rustview-report.md`
+and read it for the thread model and how the threads communicate.
+```
+
+On MultiTribDev (89k lines, 16 threads) the report is about 25 KB and is
+written in a few seconds.
 
 ## Crates
 

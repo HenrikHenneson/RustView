@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use egui::{Color32, Rect, RichText, Ui};
-use rv_analysis::{Program, Site};
+use rv_analysis::{Program, Site, op_meaning as semantics, op_writes as writes};
 use rv_ir::Project;
 
 use crate::threads::ThreadsAction;
@@ -27,52 +27,8 @@ pub struct CommView {
 }
 
 /// Operations that change shared state (or may: unknown methods).
-fn writes(op: &str) -> bool {
-    let method = op.rsplit('.').next().unwrap_or(op);
-    !matches!(method, "load" | "read" | "try_read" | "is_poisoned") && !op.starts_with("stored in")
-}
-
 fn thread_label(program: &Program, t: usize) -> String {
     format!("#{t} {}", program.threads[t].title())
-}
-
-/// What happens at an operation, in words.
-fn semantics(op: Option<&str>, bounded: bool) -> String {
-    let Some(op) = op else {
-        return "handed on or captured (not followed further)".into();
-    };
-    if let Some(field) = op.strip_prefix("stored in ") {
-        return format!("kept in the field {field}; its methods use it");
-    }
-    // `stand.lock`: the operation is on a field of the shared object.
-    let op = op.rsplit('.').next().unwrap_or(op);
-    let s = match op {
-        "send" | "blocking_send" | "send_blocking" if bounded => {
-            "sends; blocks while the channel is full"
-        }
-        "send" => "sends; does not block (unbounded)",
-        "try_send" => "sends if there is room; fails when full (message lost unless handled)",
-        "send_timeout" => "sends; waits at most a timeout when full",
-        "recv" | "blocking_recv" | "recv_async" => "waits until a message arrives",
-        "try_recv" => "polls; returns at once if nothing is there",
-        "recv_timeout" | "recv_deadline" => "waits for a message, at most a timeout",
-        "iter" => "loops over messages, waiting for each",
-        "try_iter" => "takes what is there without waiting",
-        "lock" | "write" => "exclusive lock; waits while another thread holds it",
-        "try_lock" | "try_write" => "tries to lock; does not wait",
-        "read" => "shared read lock; waits while a writer holds it",
-        "load" => "atomic read",
-        "store" => "atomic write",
-        "swap" | "compare_exchange" | "compare_exchange_weak" | "fetch_update" => {
-            "atomic read-modify-write"
-        }
-        "join" => "waits until the thread has finished",
-        "notify_one" | "notify_all" => "wakes waiting threads",
-        "wait" | "wait_timeout" | "wait_while" => "sleeps until notified",
-        op if op.starts_with("fetch_") => "atomic read-modify-write",
-        _ => "method on the object (what it does inside is not analyzed)",
-    };
-    s.to_string()
 }
 
 /// Cells of the matrix: (from, to) -> communication objects.
