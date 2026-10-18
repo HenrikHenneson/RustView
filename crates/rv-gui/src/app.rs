@@ -282,6 +282,7 @@ impl App {
 
     fn top_bar(&mut self, ui: &mut Ui) {
         egui::MenuBar::new().ui(ui, |ui| {
+            crate::window_frame::leading_space(ui);
             ui.menu_button("File", |ui| self.file_menu(ui));
             ui.separator();
             match self.loader.path() {
@@ -292,8 +293,10 @@ impl App {
                 ui.spinner();
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                crate::window_frame::buttons(ui);
                 egui::widgets::global_theme_preference_buttons(ui);
                 ui.weak("syntactic").on_hover_text(LIMITS_NOTE);
+                crate::window_frame::drag_area(ui);
             });
         });
     }
@@ -656,6 +659,7 @@ impl eframe::App for App {
         self.poll_loader();
         self.handle_input(ui);
         fix_tiny_window(ui.ctx());
+        crate::window_frame::resize_border(ui.ctx());
 
         egui::Panel::top("top_bar").show(ui, |ui| self.top_bar(ui));
         egui::Panel::bottom("status_bar").show(ui, |ui| self.status_bar(ui));
