@@ -15,6 +15,7 @@ rv-analysis = { path = "crates/rv-analysis" }
 rv-syn = { path = "crates/rv-syn" }
 rv-gui = { path = "crates/rv-gui" }
 rv-layout = { path = "crates/rv-layout" }
+rv-mcp = { path = "crates/rv-mcp" }
 
 anyhow = "1"
 log = "0.4"
@@ -32,4 +33,7 @@ notify = "8"
 notify-debouncer-full = "0.6"
 rfd = "0.17"
 resvg = "0.48"
+rmcp = { version = "3.5", features = ["server", "macros", "transport-io", "schemars"] }
+tokio = { version = "1", features = ["rt", "macros", "io-std"] }
+serde = { version = "1", features = ["derive"] }
 windows-sys = { version = "0.61", features = ["Win32_System_Console"] }

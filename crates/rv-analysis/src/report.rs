@@ -20,10 +20,51 @@ const MAX_MODULES: usize = 16;
 /// Entries of the other lists (functions, modules, unreached starts, ...).
 const MAX_LIST: usize = 12;
 
+/// Sections of the report; header, names to search for and limits are
+/// always included.
+#[derive(Clone, Copy, Debug)]
+pub struct Parts {
+    pub overview: bool,
+    pub threads: bool,
+    pub modules: bool,
+    pub hot_spots: bool,
+}
+
+impl Parts {
+    pub const ALL: Parts = Parts {
+        overview: true,
+        threads: true,
+        modules: true,
+        hot_spots: true,
+    };
+}
+
 /// The report for the whole project.
 pub fn report(project: &Project) -> String {
     let facts = Facts::new(project);
     let calls = CallGraph::new(project);
+    let programs = programs(project, &facts, &calls);
+    report_with(project, &facts, &calls, &programs, Parts::ALL)
+}
+
+/// The thread model of every binary (build scripts left out).
+pub fn programs(project: &Project, facts: &Facts, calls: &CallGraph) -> Vec<(FnId, Program)> {
+    entry_points(project)
+        .into_iter()
+        .filter(|&e| !project.function(e).qual_path.starts_with("build_script"))
+        .map(|e| (e, program(project, facts, calls, e)))
+        .collect()
+}
+
+/// Selected sections, from analyses that are already done (for callers that
+/// keep them, like the MCP server).
+pub fn report_with(
+    project: &Project,
+    facts: &Facts,
+    calls: &CallGraph,
+    programs: &[(FnId, Program)],
+    parts: Parts,
+) -> String {
     let mut r = Report {
         project,
         base: base_dir(&project.root),
@@ -33,20 +74,20 @@ pub fn report(project: &Project) -> String {
         unreached: 0,
     };
     r.header();
-    r.overview();
-    for entry in entry_points(project) {
-        if project
-            .function(entry)
-            .qual_path
-            .starts_with("build_script")
-        {
-            continue;
-        }
-        let program = program(project, &facts, &calls, entry);
-        r.threads(entry, &program);
+    if parts.overview {
+        r.overview();
     }
-    r.modules(&facts, &calls);
-    r.hot_spots(&calls);
+    if parts.threads {
+        for (entry, program) in programs {
+            r.threads(*entry, program);
+        }
+    }
+    if parts.modules {
+        r.modules(facts, calls);
+    }
+    if parts.hot_spots {
+        r.hot_spots(calls);
+    }
     r.keywords();
     r.limits();
     r.out
@@ -64,7 +105,7 @@ struct Report<'p> {
     unreached: usize,
 }
 
-fn base_dir(root: &Path) -> PathBuf {
+pub(crate) fn base_dir(root: &Path) -> PathBuf {
     if root.is_file() {
         root.parent().map(Path::to_path_buf).unwrap_or_default()
     } else {
@@ -73,7 +114,7 @@ fn base_dir(root: &Path) -> PathBuf {
 }
 
 /// Last two path segments: `Zyklus::fahren`, `task::run`.
-fn short(qual: &str) -> String {
+pub(crate) fn short(qual: &str) -> String {
     let parts: Vec<&str> = qual.rsplitn(3, "::").collect();
     match parts.as_slice() {
         [last, prev, ..] => format!("{prev}::{last}"),

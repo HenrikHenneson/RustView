@@ -179,15 +179,54 @@ The same report is the *Report* tab of the GUI: formatted, with every
 *Save…* / *Copy* buttons. On MultiTribDev (89k lines, 16 threads) it is about
 25 KB and is generated in a few seconds.
 
+## MCP server and Claude Code plugin
+
+`rustview mcp [project]` runs RustView as an [MCP](https://modelcontextprotocol.io)
+server over stdio. It loads the project once, reloads it when a file changes,
+and answers single questions in milliseconds:
+
+| tool | answers |
+|------|---------|
+| `report` | the whole report (see above) |
+| `threads` | only the concurrency part: threads, channels, shared state, joins |
+| `find` | what a name is: functions with signature, a type's fields and methods, threads, channel ends, shared state |
+| `callers` / `callees` | who calls a function / what it calls, with the call lines |
+| `threads_of` | which threads run a function |
+| `outline` | the nesting of a function with line ranges, thread starts and exits — a 2500-line function in about 3k tokens |
+
+**Claude Code plugin** (MCP server plus a skill that tells Claude when to use
+it; needs `rustview` on the `PATH`, see [Install](#install)):
+
+```
+/plugin install rustview --marketplace HenrikHenneson/RustView
+```
+
+or in two steps: `/plugin marketplace add HenrikHenneson/RustView`, then
+`/plugin install rustview@rustview`.
+
+**Only the MCP server**, in Claude Code or any other MCP client:
+
+```
+claude mcp add --transport stdio --scope user rustview -- rustview mcp
+```
+
+```json
+{ "mcpServers": { "rustview": { "command": "rustview", "args": ["mcp"] } } }
+```
+
+The server analyzes the client's working directory; pass a path after `mcp`
+to fix it to one project.
+
 ## Crates
 
 | crate      | role |
 |------------|------|
 | `rv-ir`    | backend-independent model (project, modules, functions, spans) |
 | `rv-syn`   | frontend: `cargo metadata` + `syn` → `rv-ir` |
-| `rv-analysis` | data flow (name resolution, def-use, mutation edges), concurrency (lanes, channels, shared state) |
+| `rv-analysis` | data flow (name resolution, def-use, mutation edges), concurrency (lanes, channels, shared state), program model, report and queries |
 | `rv-layout`| diagram geometry (nested frames, both orientations), no GUI dependency |
 | `rv-gui`   | egui application |
+| `rv-mcp`   | MCP server (`rustview mcp`) |
 | `rustview` | binary / CLI |
 
 ## Limits

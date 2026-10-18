@@ -1,0 +1,10 @@
+{
+  "name": "rustview",
+  "version": "0.3.0",
+  "description": "Structure of Rust projects for Claude: threads, channels, shared state, callers and function outlines with file:line, via the `rustview mcp` server",
+  "author": { "name": "Henrik Henneson" },
+  "homepage": "https://github.com/HenrikHenneson/RustView",
+  "repository": "https://github.com/HenrikHenneson/RustView",
+  "license": "MIT OR Apache-2.0",
+  "keywords": ["rust", "concurrency", "threads", "call-graph", "code-comprehension"]
+}

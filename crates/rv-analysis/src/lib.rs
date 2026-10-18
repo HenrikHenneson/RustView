@@ -5,6 +5,7 @@ pub mod concurrency;
 pub mod dataflow;
 pub mod modules;
 pub mod program;
+pub mod query;
 pub mod report;
 
 pub use concurrency::{
@@ -16,4 +17,4 @@ pub use program::{
     CallGraph, ChannelComm, Facts, JoinComm, Link, LinkKind, Program, Resource, SharedComm, Site,
     Thread, entry_points, op_effect, op_meaning, op_writes, program,
 };
-pub use report::report;
+pub use report::{Parts, programs, report, report_with};
