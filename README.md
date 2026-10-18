@@ -4,6 +4,8 @@ LabVIEW-style structural view of Rust code: nesting, data flow and
 parallelism of a program at a glance. Analysis and display only — no
 editing, no code generation.
 
+![Function diagram: nested structures, data wires and a thread lane](docs/screenshots/diagram.png)
+
 ## Why
 
 Rust projects grow fast — especially with LLM assistance, where a working
@@ -24,6 +26,18 @@ shared state, modules and hot spots with `file:line` references and the names
 to search for. It gives an AI coding assistant (or a new team member) the
 map of a project before the first question, instead of rediscovering it with
 dozens of searches.
+
+## Screenshots
+
+Shown on [MultiTribDev](https://github.com/HenrikHenneson/MultiTribDev)
+(89k lines, 16 threads).
+
+| | |
+|---|---|
+| ![Threads](docs/screenshots/threads.png) | ![Communication](docs/screenshots/communication.png) |
+| **Threads:** which thread starts which, channels and shared state | **Communication:** thread × thread matrix with the objects they share |
+| ![Call graph](docs/screenshots/callgraph.png) | ![Report](docs/screenshots/report.png) |
+| **Call graph:** modules of a crate in layers, thread starters marked | **Report:** the same analysis as text with links to the code |
 
 ## Install
 
