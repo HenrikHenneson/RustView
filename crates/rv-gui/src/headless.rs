@@ -1,4 +1,4 @@
-//! Exporting views without a window: `rustview <path> --export <dir>`.
+//! Output without a window: `rustview <path> --export <dir>` and `--report`.
 
 use std::path::{Path, PathBuf};
 
@@ -62,6 +62,12 @@ pub fn export_all(path: &Path, dir: &Path, select: Option<&str>) -> Result<Vec<P
         write(&project.function(f).qual_path, &svg)?;
     }
     Ok(written)
+}
+
+/// The Markdown project report (see [`rv_analysis::report`]).
+pub fn report(path: &Path) -> Result<String> {
+    let project = rv_syn::load(path)?;
+    Ok(rv_analysis::report(&project))
 }
 
 /// Exact qualified path, or the shortest one ending in `::wanted`.

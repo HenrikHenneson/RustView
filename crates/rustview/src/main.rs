@@ -40,12 +40,29 @@ struct Cli {
     /// function) to this directory instead of opening a window.
     #[arg(long, value_name = "DIR")]
     export: Option<PathBuf>,
+
+    /// Write a compact Markdown report (threads, channels, shared state,
+    /// modules, hot spots, names to search for) to FILE or, without FILE,
+    /// to stdout, instead of opening a window. Meant as a starting point
+    /// for LLM assistants and new readers.
+    #[arg(long, num_args = 0..=1, default_missing_value = "-", value_name = "FILE")]
+    report: Option<PathBuf>,
 }
 
 fn main() -> anyhow::Result<()> {
     attach_parent_console();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let cli = Cli::parse();
+    if let Some(out) = &cli.report {
+        let path = cli.path.clone().unwrap_or_else(|| PathBuf::from("."));
+        let text = rv_gui::report(&path)?;
+        if out.as_os_str() == "-" {
+            print!("{text}");
+        } else {
+            std::fs::write(out, text)?;
+        }
+        return Ok(());
+    }
     if let Some(dir) = &cli.export {
         let path = cli.path.clone().unwrap_or_else(|| PathBuf::from("."));
         for file in rv_gui::export_all(&path, dir, cli.select.as_deref())? {

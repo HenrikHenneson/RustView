@@ -13,7 +13,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
-use rv_ir::{Body, CallKind, CallSite, FnId, FnOwner, NodeId, Project};
+use rv_ir::{Body, CallKind, CallSite, FnId, FnOwner, NodeId, Project, TargetKind};
 
 use crate::{Concurrency, DataFlow, SpawnKind};
 
@@ -112,6 +112,9 @@ impl CallGraph {
 struct Resolver<'p> {
     project: &'p Project,
     by_name: HashMap<&'p str, Vec<FnId>>,
+    /// Crate names of library targets: callable from every crate. Other
+    /// crates (binaries) only call into themselves.
+    libs: HashSet<String>,
 }
 
 impl<'p> Resolver<'p> {
@@ -123,7 +126,24 @@ impl<'p> Resolver<'p> {
                 .or_default()
                 .push(FnId(i as u32));
         }
-        Resolver { project, by_name }
+        let libs = project
+            .packages
+            .iter()
+            .flat_map(|p| &p.targets)
+            .filter(|t| t.kind == TargetKind::Lib)
+            .map(|t| t.name.replace('-', "_"))
+            .collect();
+        Resolver {
+            project,
+            by_name,
+            libs,
+        }
+    }
+
+    /// Whether `caller` can call `callee` at all: same crate or a library.
+    fn visible(&self, caller: FnId, callee: FnId) -> bool {
+        let c = self.crate_of(callee);
+        c == self.crate_of(caller) || self.libs.contains(c)
     }
 
     fn crate_of(&self, f: FnId) -> &str {
@@ -134,7 +154,13 @@ impl<'p> Resolver<'p> {
     fn resolve(&self, caller: FnId, call: &CallSite) -> Option<FnId> {
         let p = self.project;
         let caller_fn = p.function(caller);
-        let cands = self.by_name.get(call.name())?;
+        let cands: Vec<FnId> = self
+            .by_name
+            .get(call.name())?
+            .iter()
+            .copied()
+            .filter(|&c| self.visible(caller, c))
+            .collect();
         let same_crate = |c: &&FnId| self.crate_of(**c) == self.crate_of(caller);
         match call.kind {
             CallKind::Macro => None,
@@ -222,7 +248,10 @@ impl<'p> Resolver<'p> {
                 if typed.len() == 1 {
                     return Some(**typed[0]);
                 }
-                (methods.len() == 1).then(|| *methods[0])
+                // The only project method of that name — unless the name is so
+                // common on std types that the receiver is more likely a `Vec`,
+                // `str`, `Option`, ... than the project type.
+                (methods.len() == 1 && !STD_METHODS.contains(&call.name())).then(|| *methods[0])
             }
         }
     }
@@ -282,6 +311,89 @@ fn self_type(owner: &FnOwner) -> Option<&str> {
         _ => None,
     }
 }
+
+/// Method names of common std types (collections, strings, Option/Result,
+/// iterators, smart pointers). A call like `x.len()` without a known receiver
+/// type is not guessed to be the project's only `len`.
+const STD_METHODS: &[&str] = &[
+    "len",
+    "is_empty",
+    "iter",
+    "iter_mut",
+    "into_iter",
+    "get",
+    "get_mut",
+    "insert",
+    "remove",
+    "push",
+    "pop",
+    "clear",
+    "contains",
+    "contains_key",
+    "extend",
+    "first",
+    "last",
+    "as_str",
+    "as_ref",
+    "as_mut",
+    "as_slice",
+    "to_string",
+    "to_owned",
+    "clone",
+    "map",
+    "unwrap",
+    "unwrap_or",
+    "unwrap_or_default",
+    "ok",
+    "err",
+    "is_some",
+    "is_none",
+    "take",
+    "replace",
+    "min",
+    "max",
+    "sum",
+    "count",
+    "join",
+    "split",
+    "trim",
+    "parse",
+    "lines",
+    "chars",
+    "bytes",
+    "keys",
+    "values",
+    "entry",
+    "sort",
+    "dedup",
+    "retain",
+    "drain",
+    "truncate",
+    "reset",
+    "next",
+    "label",
+    "name",
+    "kind",
+    "value",
+    "start",
+    "end",
+    "set",
+    "add",
+    "sub",
+    "abs",
+    "round",
+    "from",
+    "into",
+    "default",
+    "eq",
+    "cmp",
+    "hash",
+    "fmt",
+    "read",
+    "write",
+    "flush",
+    "close",
+];
 
 /// Traits whose methods are not callbacks of an event loop.
 const NOT_CALLBACK_TRAITS: &[&str] = &[
@@ -458,6 +570,51 @@ impl SharedComm {
     pub fn threads(&self) -> BTreeSet<usize> {
         self.users.iter().map(|s| s.thread).collect()
     }
+}
+
+/// Whether an operation on shared state (as in [`Site::op`]) may change it.
+pub fn op_writes(op: &str) -> bool {
+    let method = op.rsplit('.').next().unwrap_or(op);
+    !matches!(method, "load" | "read" | "try_read" | "is_poisoned") && !op.starts_with("stored in")
+}
+
+/// What happens at an operation (as in [`Site::op`]), in words.
+pub fn op_meaning(op: Option<&str>, bounded: bool) -> String {
+    let Some(op) = op else {
+        return "handed on or captured (not followed further)".into();
+    };
+    if let Some(field) = op.strip_prefix("stored in ") {
+        return format!("kept in the field {field}; its methods use it");
+    }
+    // `stand.lock`: the operation is on a field of the shared object.
+    let op = op.rsplit('.').next().unwrap_or(op);
+    let s = match op {
+        "send" | "blocking_send" | "send_blocking" if bounded => {
+            "sends; blocks while the channel is full"
+        }
+        "send" => "sends; does not block (unbounded)",
+        "try_send" => "sends if there is room; fails when full (message lost unless handled)",
+        "send_timeout" => "sends; waits at most a timeout when full",
+        "recv" | "blocking_recv" | "recv_async" => "waits until a message arrives",
+        "try_recv" => "polls; returns at once if nothing is there",
+        "recv_timeout" | "recv_deadline" => "waits for a message, at most a timeout",
+        "iter" => "loops over messages, waiting for each",
+        "try_iter" => "takes what is there without waiting",
+        "lock" | "write" => "exclusive lock; waits while another thread holds it",
+        "try_lock" | "try_write" => "tries to lock; does not wait",
+        "read" => "shared read lock; waits while a writer holds it",
+        "load" => "atomic read",
+        "store" => "atomic write",
+        "swap" | "compare_exchange" | "compare_exchange_weak" | "fetch_update" => {
+            "atomic read-modify-write"
+        }
+        "join" => "waits until the thread has finished",
+        "notify_one" | "notify_all" => "wakes waiting threads",
+        "wait" | "wait_timeout" | "wait_while" => "sleeps until notified",
+        op if op.starts_with("fetch_") => "atomic read-modify-write",
+        _ => "method on the object (what it does inside is not analyzed)",
+    };
+    s.to_string()
 }
 
 /// `main` functions at the root of a target (one per binary).
@@ -665,7 +822,13 @@ impl Walker<'_> {
         if !is_ctor {
             return;
         }
+        // Types of different binaries may share a name (`App`).
+        let krate = |q: &str| q.split("::").next().unwrap_or("").to_string();
+        let own_crate = krate(&func.qual_path);
         for (i, m) in self.project.functions.iter().enumerate() {
+            if krate(&m.qual_path) != own_crate {
+                continue;
+            }
             let FnOwner::Impl {
                 trait_: Some(tr), ..
             } = &m.owner
