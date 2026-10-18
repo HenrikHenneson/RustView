@@ -60,6 +60,15 @@ impl CodeView {
         self.mark = mark;
     }
 
+    /// Show `file` scrolled to `line` (1-based) with the line marked.
+    pub fn show_line(&mut self, project: &Project, file: FileId, line: u32) {
+        self.set_file(project, file);
+        self.scroll_to = Some(line);
+        self.region = None;
+        self.mark = None;
+        self.cursor_line = Some(line);
+    }
+
     pub fn show_file(&mut self, project: &Project, file: FileId) {
         self.set_file(project, file);
         self.scroll_to = Some(1);

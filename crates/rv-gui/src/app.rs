@@ -10,6 +10,7 @@ use crate::diagram::{DiagramAction, DiagramView};
 use crate::editor::EditorCommand;
 use crate::highlight::Highlighter;
 use crate::loader::Loader;
+use crate::report_view::{ReportAction, ReportView};
 use crate::threads::{ThreadsAction, ThreadsView};
 use crate::tree::{TreeAction, TreeView};
 
@@ -26,6 +27,7 @@ enum CenterTab {
     Diagram,
     Threads,
     CallGraph,
+    Report,
 }
 
 /// Actions collected while drawing and executed at the end of the frame.
@@ -52,6 +54,7 @@ pub struct App {
     diagram: DiagramView,
     threads: ThreadsView,
     callgraph: CallGraphView,
+    report: ReportView,
     center: CenterTab,
     selected: Option<FnId>,
     /// Last selection the tree was expanded to.
@@ -92,6 +95,7 @@ impl App {
                 CenterTab::Diagram
             },
             callgraph: CallGraphView::opening(options.callgraph.as_deref()),
+            report: ReportView::default(),
             selected: None,
             revealed: None,
             tree: TreeView::default(),
@@ -483,12 +487,50 @@ impl App {
                 .on_hover_text("All threads and tasks of the project");
             ui.selectable_value(&mut self.center, CenterTab::CallGraph, "Call graph")
                 .on_hover_text("Calls between modules, with drill-down to functions");
+            ui.selectable_value(&mut self.center, CenterTab::Report, "Report")
+                .on_hover_text(
+                    "Threads, communication, modules and hot spots as text, with links to the code",
+                );
         });
         ui.separator();
         match self.center {
             CenterTab::Diagram => self.diagram_panel(ui),
             CenterTab::Threads => self.threads_panel(ui),
             CenterTab::CallGraph => self.callgraph_panel(ui),
+            CenterTab::Report => self.report_panel(ui),
+        }
+    }
+
+    fn report_panel(&mut self, ui: &mut Ui) {
+        let Some(project) = &self.project else {
+            ui.centered_and_justified(|ui| ui.spinner());
+            return;
+        };
+        match self.report.ui(ui, project, self.generation) {
+            ReportAction::None => {}
+            ReportAction::Message(msg) => self.message = Some((msg, Instant::now())),
+            ReportAction::ShowFn(f) => self.select(f),
+            ReportAction::Goto(file, line) => {
+                // The innermost function around the line, if any; the report
+                // tab stays open, the code panel and diagram follow.
+                let inner = project
+                    .functions
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, f)| {
+                        f.span.file == file && (f.span.start.line..=f.span.end.line).contains(&line)
+                    })
+                    .min_by_key(|(_, f)| f.span.line_count())
+                    .map(|(i, _)| FnId(i as u32));
+                if let Some(f) = inner {
+                    self.select(f);
+                }
+                let Some(project) = &self.project else { return };
+                if let Some(f) = inner {
+                    self.diagram.reveal_line(project, f, file, line);
+                }
+                self.code.show_line(project, file, line);
+            }
         }
     }
 

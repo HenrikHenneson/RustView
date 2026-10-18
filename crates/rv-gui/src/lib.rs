@@ -13,6 +13,7 @@ mod headless;
 mod highlight;
 mod loader;
 mod program_view;
+mod report_view;
 mod threads;
 mod tree;
 mod wires;
