@@ -16,6 +16,7 @@ mod program_view;
 mod report_view;
 mod threads;
 mod tree;
+mod window_frame;
 mod wires;
 
 pub use editor::{DEFAULT_TEMPLATE as DEFAULT_EDITOR, EditorCommand};
@@ -38,9 +39,11 @@ pub struct Options {
 
 pub fn run(options: Options) -> eframe::Result {
     let native = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("RustView")
-            .with_inner_size([1600.0, 1000.0]),
+        viewport: window_frame::viewport(
+            egui::ViewportBuilder::default()
+                .with_title("RustView")
+                .with_inner_size([1600.0, 1000.0]),
+        ),
         ..Default::default()
     };
     eframe::run_native(

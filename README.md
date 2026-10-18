@@ -18,6 +18,13 @@ parallel lanes for threads, and a whole-program view of how the threads talk
 to each other. It is meant for navigating code you did not (fully) write
 yourself — to see the shape first and then jump to the right line.
 
+The same analysis is available as a short Markdown
+[report](#report-for-llm-assistants-and-new-readers): threads, channels,
+shared state, modules and hot spots with `file:line` references and the names
+to search for. It gives an AI coding assistant (or a new team member) the
+map of a project before the first question, instead of rediscovering it with
+dozens of searches.
+
 ## Install
 
 Prebuilt binaries for Windows, Linux and macOS are attached to the
@@ -64,6 +71,10 @@ by dropping a folder or `.rs` file onto the window.
 - `--select ec_task::ethercat_task` selects a function after loading
   (full qualified path or any `::`-suffix of it).
 - `--editor` defaults to `code --goto {file}:{line}:{col}`.
+
+The window has no system title bar: drag the empty part of the menu bar to
+move it, double-click it to maximize; the window buttons are at the right end
+of the menu bar (macOS keeps its own buttons).
 
 Click a function to show its structure diagram and source. In the diagram,
 click a node to jump to its code, double-click to open it in the editor, use
