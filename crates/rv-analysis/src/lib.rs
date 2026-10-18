@@ -14,6 +14,6 @@ pub use dataflow::{Binding, DataFlow, Edge, EdgeKind, data_flow};
 pub use modules::{ModuleEdge, ModuleGraph, ModuleNode, crates, module_graph};
 pub use program::{
     CallGraph, ChannelComm, Facts, JoinComm, Link, LinkKind, Program, Resource, SharedComm, Site,
-    Thread, entry_points, op_meaning, op_writes, program,
+    Thread, entry_points, op_effect, op_meaning, op_writes, program,
 };
 pub use report::report;

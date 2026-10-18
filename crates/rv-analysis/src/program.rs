@@ -578,6 +578,39 @@ pub fn op_writes(op: &str) -> bool {
     !matches!(method, "load" | "read" | "try_read" | "is_poisoned") && !op.starts_with("stored in")
 }
 
+/// Short effect of an operation (as in [`Site::op`]) on the calling thread:
+/// `blocking`, `non-blocking`, ... `None` where nothing can be said (a method
+/// unknown to the analysis, a value kept in a struct field).
+pub fn op_effect(op: Option<&str>, bounded: bool) -> Option<&'static str> {
+    let Some(op) = op else {
+        return Some("not followed");
+    };
+    if op.starts_with("stored in ") {
+        return None;
+    }
+    let op = op.rsplit('.').next().unwrap_or(op);
+    Some(match op {
+        "send" | "blocking_send" | "send_blocking" if bounded => "blocking",
+        "send" => "non-blocking",
+        "try_send" => "non-blocking, may drop",
+        "send_timeout" | "recv_timeout" | "recv_deadline" | "wait_timeout" => {
+            "blocking with timeout"
+        }
+        "recv" | "blocking_recv" | "recv_async" | "iter" | "lock" | "write" | "read" | "join"
+        | "wait" | "wait_while" => "blocking",
+        "try_recv" | "try_iter" | "try_lock" | "try_write" | "try_read" | "notify_one"
+        | "notify_all" => "non-blocking",
+        "load"
+        | "store"
+        | "swap"
+        | "compare_exchange"
+        | "compare_exchange_weak"
+        | "fetch_update" => "atomic",
+        op if op.starts_with("fetch_") => "atomic",
+        _ => return None,
+    })
+}
+
 /// What happens at an operation (as in [`Site::op`]), in words.
 pub fn op_meaning(op: Option<&str>, bounded: bool) -> String {
     let Some(op) = op else {
