@@ -1,8 +1,11 @@
 # RustView
 
-LabVIEW-style structural view of Rust code: nesting, data flow and
-parallelism of a program at a glance. Analysis and display only — no
-editing, no code generation.
+LabVIEW-style structural view of Rust code — nesting, data flow and
+parallelism of a program at a glance — plus a token-saving
+[project report](#report-for-llm-assistants-and-new-readers) for LLM coding
+assistants: threads, channels, shared state and hot spots with `file:line`
+references in a few thousand tokens, instead of dozens of searches through
+the code. Analysis and display only — no editing, no code generation.
 
 ![Function diagram: nested structures, data wires and a thread lane](docs/screenshots/diagram.png)
 
