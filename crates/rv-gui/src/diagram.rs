@@ -95,9 +95,16 @@ impl DiagramView {
     }
 
     /// Select the innermost node covering `line` of `file`, expanding what hides it.
-    pub fn reveal_line(&mut self, project: &Project, f: FnId, file: rv_ir::FileId, line: u32) {
+    /// Select the innermost node at `line`; returns it.
+    pub fn reveal_line(
+        &mut self,
+        project: &Project,
+        f: FnId,
+        file: rv_ir::FileId,
+        line: u32,
+    ) -> Option<NodeId> {
         let func = project.function(f);
-        let Some(body) = &func.body else { return };
+        let body = func.body.as_ref()?;
         let innermost = body
             .nodes
             .iter()
@@ -112,6 +119,7 @@ impl DiagramView {
         if let Some(node) = innermost {
             self.reveal_node(project, f, node);
         }
+        innermost
     }
 
     /// Select `node`, expanding the structures around it and picking its case.

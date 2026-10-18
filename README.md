@@ -146,8 +146,10 @@ Before larger changes run `rustview . --report target/rustview-report.md`
 and read it for the thread model and how the threads communicate.
 ```
 
-On MultiTribDev (89k lines, 16 threads) the report is about 25 KB and is
-written in a few seconds.
+The same report is the *Report* tab of the GUI: formatted, with every
+`file:line` and function name as a link to the code and the diagram, and
+*Save…* / *Copy* buttons. On MultiTribDev (89k lines, 16 threads) it is about
+25 KB and is generated in a few seconds.
 
 ## Crates
 
