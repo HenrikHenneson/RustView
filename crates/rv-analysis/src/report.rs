@@ -271,7 +271,9 @@ impl Report<'_> {
         }
         self.line(
             "Thread #0 is the main thread. A thread runs the functions reachable from \
-             its entry without passing another thread start.",
+             its entry without passing another thread start. The effect after a site \
+             (blocking, non-blocking, may drop, atomic) follows from the API method \
+             and the channel capacity, not from the code around the call.",
         );
         self.line("");
         for (i, t) in program.threads.iter().enumerate() {
