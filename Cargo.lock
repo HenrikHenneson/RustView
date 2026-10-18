@@ -3413,7 +3413,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "rustview"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3424,7 +3424,7 @@ dependencies = [
 
 [[package]]
 name = "rv-analysis"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "rv-ir",
  "rv-syn",
@@ -3432,7 +3432,7 @@ dependencies = [
 
 [[package]]
 name = "rv-gui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "eframe",
@@ -3451,11 +3451,11 @@ dependencies = [
 
 [[package]]
 name = "rv-ir"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "rv-layout"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "emath",
  "rv-ir",
@@ -3464,7 +3464,7 @@ dependencies = [
 
 [[package]]
 name = "rv-syn"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "cargo_metadata",
