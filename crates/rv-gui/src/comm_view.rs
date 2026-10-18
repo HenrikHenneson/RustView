@@ -392,7 +392,15 @@ fn site_list(
                     if let Some(op) = &s.op {
                         ui.monospace(op);
                     }
-                    ui.weak(semantics(s.op.as_deref(), bounded));
+                    let long = semantics(s.op.as_deref(), bounded);
+                    match rv_analysis::op_effect(s.op.as_deref(), bounded) {
+                        Some(effect) => {
+                            ui.weak(effect).on_hover_text(long);
+                        }
+                        None => {
+                            ui.weak(long);
+                        }
+                    }
                 });
             }
         });

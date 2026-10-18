@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use rv_ir::{Body, FnId, NodeId, NodeKind, Project, Severity, Span};
 
 use crate::{
-    CallGraph, Facts, Program, Site, crates, entry_points, module_graph, op_meaning, op_writes,
+    CallGraph, Facts, Program, Site, crates, entry_points, module_graph, op_effect, op_writes,
     program,
 };
 
@@ -401,13 +401,9 @@ impl Report<'_> {
                     .path,
             );
             let lines: Vec<String> = lines.iter().map(u32::to_string).collect();
-            // Unknown methods get no explanation (it would only say "unknown").
-            let meaning = op_meaning(*op, bounded);
-            let meaning = if meaning == op_meaning(Some(""), false) {
-                String::new()
-            } else {
-                format!(" — {meaning}")
-            };
+            let meaning = op_effect(*op, bounded)
+                .map(|e| format!(" — {e}"))
+                .unwrap_or_default();
             self.line(format!(
                 "  - {role} in {}: `{}` in `{}` ({file}:{}){meaning}",
                 Self::thread_ref(program, *thread),
