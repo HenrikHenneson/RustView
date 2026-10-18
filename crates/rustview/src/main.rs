@@ -5,11 +5,14 @@
 
 use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(version, about)]
+#[command(version, about, args_conflicts_with_subcommands = true)]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Cmd>,
+
     /// Cargo project directory (package or workspace) or a single .rs file.
     /// Without it, RustView starts with the project selection screen.
     path: Option<PathBuf>,
@@ -49,10 +52,28 @@ struct Cli {
     report: Option<PathBuf>,
 }
 
+#[derive(Subcommand)]
+enum Cmd {
+    /// Run as MCP server over stdin/stdout for AI coding assistants (e.g.
+    /// `claude mcp add rustview -- rustview mcp`). Answers questions about
+    /// threads, channels, shared state, callers and the nesting of functions.
+    Mcp {
+        /// Cargo project directory; default: the current directory.
+        path: Option<PathBuf>,
+    },
+}
+
 fn main() -> anyhow::Result<()> {
-    attach_parent_console();
+    // As MCP server stdin/stdout are the pipes to the client: no console.
+    let mcp = std::env::args().nth(1).as_deref() == Some("mcp");
+    if !mcp {
+        attach_parent_console();
+    }
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let cli = Cli::parse();
+    if let Some(Cmd::Mcp { path }) = cli.command {
+        return rv_mcp::serve(path.unwrap_or_else(|| PathBuf::from(".")));
+    }
     if let Some(out) = &cli.report {
         let path = cli.path.clone().unwrap_or_else(|| PathBuf::from("."));
         let text = rv_gui::report(&path)?;

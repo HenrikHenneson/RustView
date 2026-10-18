@@ -1,0 +1,18 @@
+[package]
+name = "rv-mcp"
+description = "MCP server of RustView: project structure queries for AI assistants"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rv-ir.workspace = true
+rv-syn.workspace = true
+rv-analysis.workspace = true
+anyhow.workspace = true
+log.workspace = true
+rmcp.workspace = true
+tokio.workspace = true
+serde.workspace = true

@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 rv-gui.workspace = true
+rv-mcp.workspace = true
 anyhow.workspace = true
 env_logger.workspace = true
 clap.workspace = true

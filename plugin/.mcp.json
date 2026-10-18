@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "rustview": {
+      "command": "rustview",
+      "args": ["mcp"]
+    }
+  }
+}

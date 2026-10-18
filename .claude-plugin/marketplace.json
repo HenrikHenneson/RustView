@@ -1,0 +1,12 @@
+{
+  "name": "rustview",
+  "description": "RustView: structure of Rust projects (threads, channels, shared state, call graph, nesting) for Claude Code",
+  "owner": { "name": "Henrik Henneson" },
+  "plugins": [
+    {
+      "name": "rustview",
+      "source": "./plugin",
+      "description": "MCP server `rustview mcp` with a skill that tells Claude when to ask it"
+    }
+  ]
+}
