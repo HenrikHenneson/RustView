@@ -14,6 +14,7 @@ mod cargo;
 mod exprtree;
 mod modtree;
 mod source;
+mod text;
 mod vars;
 
 pub use cargo::{PackageSpec, TargetSpec};

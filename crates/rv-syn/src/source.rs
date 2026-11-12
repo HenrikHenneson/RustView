@@ -74,6 +74,25 @@ impl Parsed {
     }
 }
 
+/// A parsed file together with its id in the project.
+#[derive(Clone, Copy)]
+pub struct Source<'a> {
+    pub parsed: &'a Parsed,
+    pub file: FileId,
+}
+
+impl Source<'_> {
+    /// Span of a syntax node of this file.
+    pub fn span(&self, s: proc_macro2::Span) -> Span {
+        self.parsed.span(self.file, s)
+    }
+
+    /// Source text of a syntax node, whitespace collapsed.
+    pub fn text_of(&self, s: proc_macro2::Span) -> String {
+        self.parsed.text_of(s)
+    }
+}
+
 /// Collapse whitespace runs to single spaces and drop the spaces (and the
 /// trailing comma) that multi-line formatting leaves inside brackets.
 pub fn collapse_ws(s: &str) -> String {
