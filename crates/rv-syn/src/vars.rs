@@ -331,6 +331,14 @@ pub(crate) fn token_names(ts: TokenStream, out: &mut Vec<(String, proc_macro2::S
     }
 }
 
+/// Name of a struct field or tuple index.
+pub(crate) fn member_name(member: &syn::Member) -> String {
+    match member {
+        syn::Member::Named(id) => id.to_string(),
+        syn::Member::Unnamed(i) => i.index.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
