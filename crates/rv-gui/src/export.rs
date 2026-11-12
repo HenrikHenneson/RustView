@@ -13,6 +13,27 @@ const PNG_SCALE: f32 = 2.0;
 const MAX_PNG_SIDE: f32 = 16000.0;
 const MARGIN: f32 = 16.0;
 
+/// Font and color of a text in an export.
+#[derive(Clone, Copy, Debug)]
+pub struct TextStyle {
+    pub size: f32,
+    pub color: Color32,
+    /// Monospace instead of the proportional UI font.
+    pub mono: bool,
+    pub bold: bool,
+}
+
+impl TextStyle {
+    pub fn new(size: f32, color: Color32, mono: bool, bold: bool) -> Self {
+        TextStyle {
+            size,
+            color,
+            mono,
+            bold,
+        }
+    }
+}
+
 /// A small SVG writer in diagram coordinates.
 pub struct Svg {
     size: Vec2,
@@ -42,6 +63,39 @@ impl Svg {
     }
 
     /// `pos` is the top-left corner of the text.
+    pub fn label(&mut self, pos: Pos2, text: &str, style: TextStyle) {
+        self.write_text(pos, text, style, None);
+    }
+
+    /// Like [`Self::label`], but the text is fitted to exactly `width`
+    /// (layout boxes were measured with the GUI font).
+    pub fn label_fit(&mut self, pos: Pos2, text: &str, style: TextStyle, width: f32) {
+        self.write_text(pos, text, style, Some(width));
+    }
+
+    fn write_text(&mut self, pos: Pos2, text: &str, style: TextStyle, width: Option<f32>) {
+        let family = if style.mono {
+            "Consolas, 'DejaVu Sans Mono', monospace"
+        } else {
+            "'Segoe UI', 'DejaVu Sans', sans-serif"
+        };
+        let weight = if style.bold { "bold" } else { "normal" };
+        let size = style.size;
+        let fit = width.filter(|w| *w > 1.0).map_or(String::new(), |w| {
+            format!(r#" textLength="{w:.1}" lengthAdjust="spacingAndGlyphs""#)
+        });
+        let _ = writeln!(
+            self.body,
+            r#"<text x="{:.1}" y="{:.1}" font-family="{family}" font-size="{size:.1}" font-weight="{weight}" fill="{}" dominant-baseline="hanging" xml:space="preserve"{fit}>{}</text>"#,
+            pos.x + MARGIN,
+            pos.y + MARGIN,
+            hex(style.color),
+            escape(text),
+        );
+    }
+
+    /// [`Self::label`] with the style given piece by piece, for the views
+    /// that still call it this way.
     pub fn text(
         &mut self,
         pos: Pos2,
@@ -51,11 +105,13 @@ impl Svg {
         mono: bool,
         bold: bool,
     ) {
-        self.text_fit(pos, text, size, color, mono, bold, None);
+        self.label(pos, text, TextStyle::new(size, color, mono, bold));
     }
 
-    /// Like [`Self::text`]; with `width` the text is fitted to exactly that
-    /// width (layout boxes were measured with the GUI font).
+    /// [`Self::label_fit`] with the style given piece by piece, for the
+    /// views that still call it this way; without `width` like
+    /// [`Self::text`]. To be removed together with this `allow` once they
+    /// pass a [`TextStyle`].
     #[allow(clippy::too_many_arguments)]
     pub fn text_fit(
         &mut self,
@@ -67,23 +123,7 @@ impl Svg {
         bold: bool,
         width: Option<f32>,
     ) {
-        let family = if mono {
-            "Consolas, 'DejaVu Sans Mono', monospace"
-        } else {
-            "'Segoe UI', 'DejaVu Sans', sans-serif"
-        };
-        let weight = if bold { "bold" } else { "normal" };
-        let fit = width.filter(|w| *w > 1.0).map_or(String::new(), |w| {
-            format!(r#" textLength="{w:.1}" lengthAdjust="spacingAndGlyphs""#)
-        });
-        let _ = writeln!(
-            self.body,
-            r#"<text x="{:.1}" y="{:.1}" font-family="{family}" font-size="{size:.1}" font-weight="{weight}" fill="{}" dominant-baseline="hanging" xml:space="preserve"{fit}>{}</text>"#,
-            pos.x + MARGIN,
-            pos.y + MARGIN,
-            hex(color),
-            escape(text),
-        );
+        self.write_text(pos, text, TextStyle::new(size, color, mono, bold), width);
     }
 
     pub fn polyline(&mut self, pts: &[Pos2], width: f32, color: Color32, dash: Option<(f32, f32)>) {
@@ -234,13 +274,10 @@ mod tests {
             Some((1.0, Color32::BLUE)),
             4.0,
         );
-        svg.text(
+        svg.label(
             egui::pos2(6.0, 6.0),
             "a < b & c",
-            12.0,
-            Color32::BLACK,
-            true,
-            false,
+            TextStyle::new(12.0, Color32::BLACK, true, false),
         );
         svg.arrow(
             &[egui::pos2(120.0, 15.0), egui::pos2(190.0, 60.0)],
