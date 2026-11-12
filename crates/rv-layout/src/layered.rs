@@ -16,15 +16,34 @@ pub struct LayeredLayout {
 /// `sizes`: size of each node; `edges`: (from, to); `gap`: space between
 /// columns (x) and between nodes of a column (y).
 pub fn layered(sizes: &[Vec2], edges: &[(usize, usize)], gap: Vec2) -> LayeredLayout {
-    let n = sizes.len();
+    let dag = acyclic(&successors(sizes.len(), edges));
+    let ranks = longest_path_ranks(&dag);
+    let layers = ordered_layers(&dag, &ranks);
+    let (positions, size) = coordinates(&layers, sizes, gap);
+    LayeredLayout {
+        positions,
+        ranks,
+        size,
+    }
+}
+
+/// Successor lists of `n` nodes without self loops, duplicates and edges
+/// to unknown nodes.
+fn successors(n: usize, edges: &[(usize, usize)]) -> Vec<Vec<usize>> {
     let mut out: Vec<Vec<usize>> = vec![Vec::new(); n];
     for &(a, b) in edges {
         if a != b && a < n && b < n && !out[a].contains(&b) {
             out[a].push(b);
         }
     }
-    let dag = acyclic(&out);
-    let ranks = longest_path_ranks(&dag);
+    out
+}
+
+/// The nodes of every rank, ordered to reduce crossings: sweeps alternately
+/// down and up the ranks, sorting each by the barycenter of its neighbors
+/// in the rank before.
+fn ordered_layers(dag: &[Vec<usize>], ranks: &[usize]) -> Vec<Vec<usize>> {
+    let n = dag.len();
     let rank_count = ranks.iter().copied().max().map_or(0, |r| r + 1);
 
     // Initial order: by index within each rank.
@@ -39,44 +58,53 @@ pub fn layered(sizes: &[Vec2], edges: &[(usize, usize)], gap: Vec2) -> LayeredLa
         }
     }
     let mut pos = vec![0.0f32; n];
-    let set_pos = |layers: &Vec<Vec<usize>>, pos: &mut Vec<f32>| {
-        for layer in layers {
-            for (i, &v) in layer.iter().enumerate() {
-                pos[v] = i as f32;
-            }
-        }
-    };
-    set_pos(&layers, &mut pos);
+    for layer in &layers {
+        number(layer, &mut pos);
+    }
     for sweep in 0..8 {
         let down = sweep % 2 == 0;
-        let order: Vec<usize> = if down {
-            (1..rank_count).collect()
+        let (order, neighbors): (Vec<usize>, &[Vec<usize>]) = if down {
+            ((1..rank_count).collect(), &preds)
         } else {
-            (0..rank_count.saturating_sub(1)).rev().collect()
+            ((0..rank_count.saturating_sub(1)).rev().collect(), dag)
         };
         for r in order {
-            let neighbors = |v: usize| -> &Vec<usize> { if down { &preds[v] } else { &dag[v] } };
-            let mut keyed: Vec<(f32, usize)> = layers[r]
-                .iter()
-                .map(|&v| {
-                    let ns = neighbors(v);
-                    let key = if ns.is_empty() {
-                        pos[v]
-                    } else {
-                        ns.iter().map(|&u| pos[u]).sum::<f32>() / ns.len() as f32
-                    };
-                    (key, v)
-                })
-                .collect();
-            keyed.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-            layers[r] = keyed.into_iter().map(|(_, v)| v).collect();
-            for (i, &v) in layers[r].iter().enumerate() {
-                pos[v] = i as f32;
-            }
+            sort_by_barycenter(&mut layers[r], neighbors, &pos);
+            number(&layers[r], &mut pos);
         }
     }
+    layers
+}
 
-    // Coordinates: columns side by side, each column centered vertically.
+/// Sets the position of every node of `layer` to its index in the layer.
+fn number(layer: &[usize], pos: &mut [f32]) {
+    for (i, &v) in layer.iter().enumerate() {
+        pos[v] = i as f32;
+    }
+}
+
+/// Sorts `layer` by the mean position of each node's neighbors; nodes
+/// without neighbors keep their position.
+fn sort_by_barycenter(layer: &mut Vec<usize>, neighbors: &[Vec<usize>], pos: &[f32]) {
+    let mut keyed: Vec<(f32, usize)> = layer
+        .iter()
+        .map(|&v| {
+            let ns = &neighbors[v];
+            let key = if ns.is_empty() {
+                pos[v]
+            } else {
+                ns.iter().map(|&u| pos[u]).sum::<f32>() / ns.len() as f32
+            };
+            (key, v)
+        })
+        .collect();
+    keyed.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    *layer = keyed.into_iter().map(|(_, v)| v).collect();
+}
+
+/// Top-left corner of every node and the total size: columns side by side,
+/// each column centered vertically.
+fn coordinates(layers: &[Vec<usize>], sizes: &[Vec2], gap: Vec2) -> (Vec<Pos2>, Vec2) {
     let col_width: Vec<f32> = layers
         .iter()
         .map(|l| l.iter().map(|&v| sizes[v].x).fold(0.0, f32::max))
@@ -88,7 +116,7 @@ pub fn layered(sizes: &[Vec2], edges: &[(usize, usize)], gap: Vec2) -> LayeredLa
         })
         .collect();
     let height = col_height.iter().copied().fold(0.0, f32::max);
-    let mut positions = vec![Pos2::ZERO; n];
+    let mut positions = vec![Pos2::ZERO; sizes.len()];
     let mut x = 0.0;
     for (r, layer) in layers.iter().enumerate() {
         let mut y = (height - col_height[r]) / 2.0;
@@ -99,23 +127,14 @@ pub fn layered(sizes: &[Vec2], edges: &[(usize, usize)], gap: Vec2) -> LayeredLa
         x += col_width[r] + gap.x;
     }
     let width = (x - gap.x).max(0.0);
-    LayeredLayout {
-        positions,
-        ranks,
-        size: vec2(width, height),
-    }
+    (positions, vec2(width, height))
 }
 
 /// Successor lists without the edges that close a cycle (found by DFS,
 /// starting from nodes without predecessors).
 fn acyclic(out: &[Vec<usize>]) -> Vec<Vec<usize>> {
     let n = out.len();
-    let mut indegree = vec![0; n];
-    for succ in out {
-        for &b in succ {
-            indegree[b] += 1;
-        }
-    }
+    let indegree = indegrees(out);
     let mut starts: Vec<usize> = (0..n).collect();
     starts.sort_by_key(|&v| (indegree[v] != 0, v));
     // 0 = new, 1 = on stack, 2 = done
@@ -149,14 +168,21 @@ fn acyclic(out: &[Vec<usize>]) -> Vec<Vec<usize>> {
     dag
 }
 
-fn longest_path_ranks(dag: &[Vec<usize>]) -> Vec<usize> {
-    let n = dag.len();
-    let mut indegree = vec![0; n];
-    for succ in dag {
+/// Number of predecessors of every node.
+fn indegrees(successors: &[Vec<usize>]) -> Vec<usize> {
+    let mut indegree = vec![0; successors.len()];
+    for succ in successors {
         for &b in succ {
             indegree[b] += 1;
         }
     }
+    indegree
+}
+
+/// Rank of every node: the length of the longest path leading to it.
+fn longest_path_ranks(dag: &[Vec<usize>]) -> Vec<usize> {
+    let n = dag.len();
+    let mut indegree = indegrees(dag);
     let mut queue: Vec<usize> = (0..n).filter(|&v| indegree[v] == 0).collect();
     let mut rank = vec![0; n];
     let mut head = 0;

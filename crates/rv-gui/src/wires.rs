@@ -112,6 +112,34 @@ fn anchor(item: &Item, orientation: Orientation) -> Pos2 {
     }
 }
 
+/// The statement direction of a diagram and the direction across it, in
+/// which the wires bulge out.
+#[derive(Clone, Copy)]
+struct Axes {
+    vertical: bool,
+}
+
+impl Axes {
+    /// Coordinate in statement direction.
+    fn along(self, p: Pos2) -> f32 {
+        if self.vertical { p.y } else { p.x }
+    }
+
+    /// Coordinate in the direction wires bulge out.
+    fn across(self, p: Pos2) -> f32 {
+        if self.vertical { p.x } else { p.y }
+    }
+
+    fn point(self, along: f32, across: f32) -> Pos2 {
+        if self.vertical {
+            pos2(across, along)
+        } else {
+            pos2(along, across)
+        }
+    }
+}
+
+/// The wires for `specs` between the items that are visible in `layout`.
 pub fn geometry(
     body: &Body,
     specs: &[WireSpec],
@@ -125,7 +153,6 @@ pub fn geometry(
         .filter(|i| !matches!(i.kind, ItemKind::Frame { .. }))
         .map(|i| i.rect)
         .collect();
-    let vertical = orientation == Orientation::Vertical;
     let mut seen = HashSet::new();
     let mut wires = Vec::new();
     for (i, spec) in specs.iter().enumerate() {
@@ -138,65 +165,62 @@ pub fn geometry(
         if a.node == b.node || !seen.insert((a.node, b.node, spec.name.clone(), spec.kind)) {
             continue;
         }
-        let p3 = anchor(b, orientation);
-        let mut p0 = anchor(a, orientation);
-        if a.rect.contains_rect(b.rect) {
-            // Parameters, pattern bindings of a case: start in the header
-            // right above the target instead of at the container's far edge.
-            p0 = if vertical {
-                pos2(p3.x, a.rect.min.y + 11.0)
-            } else {
-                pos2(a.rect.min.x + 11.0, p3.y)
-            };
-        }
-        // Clear every box between the two ends (but not the boxes that
-        // contain an end).
-        let (lo, hi, mut clear) = if vertical {
-            (p0.y.min(p3.y), p0.y.max(p3.y), p0.x.max(p3.x))
-        } else {
-            (p0.x.min(p3.x), p0.x.max(p3.x), p0.y.max(p3.y))
-        };
-        for r in &obstacles {
-            let (r_lo, r_hi, r_far) = if vertical {
-                (r.min.y, r.max.y, r.max.x)
-            } else {
-                (r.min.x, r.max.x, r.max.y)
-            };
-            if r_hi > lo && r_lo < hi && !r.contains_rect(a.rect) && !r.contains_rect(b.rect) {
-                clear = clear.max(r_far);
-            }
-        }
-        // Longer wires go further out, so nested arcs stay apart; concurrency
-        // wires run outside the data wires.
-        let outer = if spec.kind.is_concurrency() {
-            40.0
-        } else {
-            0.0
-        };
-        let target = clear + 10.0 + outer + (0.06 * (hi - lo)).min(60.0);
-        // A cubic Bézier reaches 3/4 of the way to its control points.
-        let near = if vertical {
-            p0.x.min(p3.x)
-        } else {
-            p0.y.min(p3.y)
-        };
-        let c = (target - 0.25 * near) / 0.75;
-        let points = if vertical {
-            [p0, pos2(c, p0.y), pos2(c, p3.y), p3]
-        } else {
-            [p0, pos2(p0.x, c), pos2(p3.x, c), p3]
-        };
         wires.push(Wire {
             spec: i,
             from: a.node,
             to: b.node,
-            points,
+            points: route(a, b, spec.kind, &obstacles, orientation),
             kind: spec.kind,
             certain: spec.certain,
             name: spec.name.clone(),
         });
     }
     wires
+}
+
+/// Control points of the arc from item `a` to item `b` that passes beside
+/// all `obstacles` between them.
+fn route(
+    a: &Item,
+    b: &Item,
+    kind: WireKind,
+    obstacles: &[Rect],
+    orientation: Orientation,
+) -> [Pos2; 4] {
+    let axes = Axes {
+        vertical: orientation == Orientation::Vertical,
+    };
+    let p3 = anchor(b, orientation);
+    let mut p0 = anchor(a, orientation);
+    if a.rect.contains_rect(b.rect) {
+        // Parameters, pattern bindings of a case: start in the header
+        // right above the target instead of at the container's far edge.
+        p0 = axes.point(axes.along(a.rect.min) + 11.0, axes.across(p3));
+    }
+    // Clear every box between the two ends (but not the boxes that
+    // contain an end).
+    let lo = axes.along(p0).min(axes.along(p3));
+    let hi = axes.along(p0).max(axes.along(p3));
+    let mut clear = axes.across(p0).max(axes.across(p3));
+    for r in obstacles {
+        let between = axes.along(r.max) > lo && axes.along(r.min) < hi;
+        if between && !r.contains_rect(a.rect) && !r.contains_rect(b.rect) {
+            clear = clear.max(axes.across(r.max));
+        }
+    }
+    // Longer wires go further out, so nested arcs stay apart; concurrency
+    // wires run outside the data wires.
+    let outer = if kind.is_concurrency() { 40.0 } else { 0.0 };
+    let target = clear + 10.0 + outer + (0.06 * (hi - lo)).min(60.0);
+    // A cubic Bézier reaches 3/4 of the way to its control points.
+    let near = axes.across(p0).min(axes.across(p3));
+    let c = (target - 0.25 * near) / 0.75;
+    [
+        p0,
+        axes.point(axes.along(p0), c),
+        axes.point(axes.along(p3), c),
+        p3,
+    ]
 }
 
 /// Wire under `pos` (diagram coordinates) within `tolerance`.
@@ -229,10 +253,14 @@ fn distance_to_segment(p: Pos2, a: Pos2, b: Pos2) -> f32 {
     (p - (a + ab * t)).length()
 }
 
+/// How wires are drawn in one frame.
 pub struct WireStyle {
     pub dark: bool,
     pub zoom: f32,
+    /// Screen position of the diagram's origin.
     pub origin: Pos2,
+    /// Visible part of the screen; wires outside of it are skipped.
+    pub clip: Rect,
 }
 
 /// Color of a wire, stable across frames (data wires: per variable name).
@@ -274,38 +302,47 @@ pub fn color(name: &str, kind: WireKind, dark: bool) -> Color32 {
     }
 }
 
-pub fn paint(
-    painter: &Painter,
-    wire: &Wire,
-    style: &WireStyle,
-    alpha: f32,
-    highlighted: bool,
-    clip: Rect,
-) {
-    let to_screen = |p: Pos2| style.origin + p.to_vec2() * style.zoom;
-    let pts: Vec<Pos2> = wire.sample().map(to_screen).collect();
-    let bounds = Rect::from_points(&pts);
-    if !bounds.expand(4.0).intersects(clip) {
-        return;
-    }
-    let color = color(&wire.name, wire.kind, style.dark).gamma_multiply(alpha);
-    let mut width = match wire.kind {
+/// Line width and dash pattern (dash, gap) of a wire on screen.
+fn stroke_pattern(wire: &Wire) -> (f32, Option<(f32, f32)>) {
+    let width = match wire.kind {
         WireKind::Data | WireKind::PossibleMutation => 1.4,
         WireKind::Mutation => 1.6,
         WireKind::Shared | WireKind::LoopBack => 2.0,
         WireKind::Channel => 3.0,
     };
+    let dash = match wire.kind {
+        WireKind::Shared => Some((2.0, 4.0)),
+        WireKind::LoopBack => Some((9.0, 4.0)),
+        _ if !wire.certain || wire.kind == WireKind::PossibleMutation => Some((6.0, 4.0)),
+        _ => None,
+    };
+    (width, dash)
+}
+
+/// Paints `wire` with opacity `alpha`; a `highlighted` wire is drawn thicker.
+pub fn paint(painter: &Painter, wire: &Wire, style: &WireStyle, alpha: f32, highlighted: bool) {
+    let to_screen = |p: Pos2| style.origin + p.to_vec2() * style.zoom;
+    // A Bézier curve stays within the hull of its control points, so wires
+    // far off screen are skipped without sampling them (one unit more than
+    // below, so rounding never skips a wire the exact test would keep).
+    let hull = Rect::from_points(&wire.points.map(to_screen));
+    if !hull.expand(5.0).intersects(style.clip) {
+        return;
+    }
+    let pts: Vec<Pos2> = wire.sample().map(to_screen).collect();
+    let bounds = Rect::from_points(&pts);
+    if !bounds.expand(4.0).intersects(style.clip) {
+        return;
+    }
+    let color = color(&wire.name, wire.kind, style.dark).gamma_multiply(alpha);
+    let (mut width, dash) = stroke_pattern(wire);
     if highlighted {
         width += 1.5;
     }
     let stroke = Stroke::new(width, color);
-    match wire.kind {
-        WireKind::Shared => painter.extend(Shape::dashed_line(&pts, stroke, 2.0, 4.0)),
-        WireKind::LoopBack => painter.extend(Shape::dashed_line(&pts, stroke, 9.0, 4.0)),
-        _ if !wire.certain || wire.kind == WireKind::PossibleMutation => {
-            painter.extend(Shape::dashed_line(&pts, stroke, 6.0, 4.0))
-        }
-        _ => {
+    match dash {
+        Some((dash, gap)) => painter.extend(Shape::dashed_line(&pts, stroke, dash, gap)),
+        None => {
             painter.add(Shape::line(pts.clone(), stroke));
         }
     }
