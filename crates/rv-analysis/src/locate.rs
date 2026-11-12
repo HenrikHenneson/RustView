@@ -1,5 +1,5 @@
 //! `file:line` references relative to the project directory, shared by the
-//! text outputs (report, health, queries).
+//! text outputs (report, maintainability, queries).
 
 use std::path::{Path, PathBuf};
 

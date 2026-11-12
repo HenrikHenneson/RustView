@@ -1,11 +1,11 @@
-//! The health of a project as Markdown, worst findings first, every one
+//! The maintainability findings of a project as Markdown, worst findings first, every one
 //! with a `file:line`.
 
 use std::fmt::Write;
 
 use rv_ir::{ModuleId, Project};
 
-use super::{Cycle, FileHealth, FnHealth, Health, Level, Limit, Measure, Shares};
+use super::{Cycle, FileMeasures, FnMeasures, Level, Limit, Maintainability, Measure, Shares};
 use crate::locate::Loc;
 
 /// Functions or files listed per level.
@@ -13,11 +13,11 @@ const MAX_LIST: usize = 25;
 /// Links listed per cycle.
 const MAX_LINKS: usize = 6;
 
-/// Markdown report of `health`.
-pub fn health_report(project: &Project, health: &Health) -> String {
+/// Markdown report of `maintainability`.
+pub fn maintainability_report(project: &Project, maintainability: &Maintainability) -> String {
     let mut w = Writer {
         loc: Loc::new(project),
-        health,
+        maintainability,
         out: String::new(),
     };
     w.header();
@@ -30,7 +30,7 @@ pub fn health_report(project: &Project, health: &Health) -> String {
 
 struct Writer<'a> {
     loc: Loc<'a>,
-    health: &'a Health,
+    maintainability: &'a Maintainability,
     out: String,
 }
 
@@ -47,8 +47,8 @@ impl Writer<'_> {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let score = self.health.score();
-        self.line(format!("# RustView code health: {name}"));
+        let score = self.maintainability.score();
+        self.line(format!("# RustView maintainability: {name}"));
         self.line("");
         self.line(format!(
             "**Score {} / 100 (grade {})** — functions {}, files {}, modules {}. \
@@ -58,8 +58,8 @@ impl Writer<'_> {
             score.functions,
             score.files,
             score.modules,
-            self.health.violations(),
-            plural(self.health.violations()),
+            self.maintainability.violations(),
+            plural(self.maintainability.violations()),
         ));
         self.line("");
         self.line(
@@ -72,7 +72,7 @@ impl Writer<'_> {
     }
 
     fn limits(&mut self) {
-        let l = self.health.limits;
+        let l = self.maintainability.limits;
         self.line("| measure | target | limit |");
         self.line("|---|---|---|");
         let rows = [
@@ -105,7 +105,7 @@ impl Writer<'_> {
     }
 
     fn functions(&mut self) {
-        let h = self.health;
+        let h = self.maintainability;
         self.line("## Functions");
         self.line("");
         self.shares("functions", h.functions.len(), h.fn_shares());
@@ -113,7 +113,7 @@ impl Writer<'_> {
             (Level::OverLimit, "Over a limit"),
             (Level::OverTarget, "Over a target"),
         ] {
-            let found: Vec<&FnHealth> = h
+            let found: Vec<&FnMeasures> = h
                 .functions
                 .iter()
                 .filter(|f| h.fn_level(f) == level)
@@ -134,12 +134,12 @@ impl Writer<'_> {
 
     /// One function with its measures; what is over a limit is bold, what
     /// is within the target is left out.
-    fn function(&self, f: &FnHealth) -> String {
+    fn function(&self, f: &FnMeasures) -> String {
         let mut text = format!("- {}:", self.loc.func(f.f));
         let mut first = true;
         for m in Measure::ALL {
             let value = f.value(m);
-            let level = self.health.limits.of(m).level(value);
+            let level = self.maintainability.limits.of(m).level(value);
             if level == Level::Ok && m != Measure::Lines {
                 continue;
             }
@@ -168,11 +168,11 @@ impl Writer<'_> {
     }
 
     fn files(&mut self) {
-        let h = self.health;
+        let h = self.maintainability;
         self.line("## Files");
         self.line("");
         self.shares("files", h.files.len(), h.file_shares());
-        let long: Vec<&FileHealth> = h
+        let long: Vec<&FileMeasures> = h
             .files
             .iter()
             .filter(|f| h.file_level(f) != Level::Ok)
@@ -196,7 +196,7 @@ impl Writer<'_> {
     }
 
     fn cycles(&mut self) {
-        let h = self.health;
+        let h = self.maintainability;
         self.line("## Module cycles");
         self.line("");
         if h.cycles.is_empty() {

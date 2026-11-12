@@ -1,4 +1,4 @@
-//! Code health: how much of a project stays within limits that keep code
+//! Maintainability: how much of a project stays within limits that keep code
 //! readable and changeable. Three things are measured, all from the
 //! structure RustView already has:
 //!
@@ -23,7 +23,7 @@ mod cycles;
 mod markdown;
 
 pub use cycles::{Cycle, CycleLink};
-pub use markdown::health_report;
+pub use markdown::maintainability_report;
 
 /// Where a value stands against its [`Limit`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -128,7 +128,7 @@ impl Limits {
 
 /// The measures of one function with a body.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FnHealth {
+pub struct FnMeasures {
     pub f: FnId,
     pub lines: u32,
     pub complexity: u32,
@@ -136,9 +136,9 @@ pub struct FnHealth {
     pub params: u32,
 }
 
-impl FnHealth {
+impl FnMeasures {
     fn new(f: FnId, func: &Function, body: &Body) -> Self {
-        FnHealth {
+        FnMeasures {
             f,
             lines: func.body_span.as_ref().unwrap_or(&func.span).line_count(),
             complexity: complexity(body),
@@ -175,7 +175,7 @@ impl FnHealth {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FileHealth {
+pub struct FileMeasures {
     pub file: FileId,
     pub lines: u32,
 }
@@ -242,33 +242,33 @@ impl Score {
     }
 }
 
-/// The health of a project.
+/// The maintainability of a project.
 #[derive(Clone, Debug)]
-pub struct Health {
+pub struct Maintainability {
     pub limits: Limits,
     /// Functions with a body, worst first.
-    pub functions: Vec<FnHealth>,
+    pub functions: Vec<FnMeasures>,
     /// Files with analyzed modules, longest first.
-    pub files: Vec<FileHealth>,
+    pub files: Vec<FileMeasures>,
     /// Modules that call each other in a cycle, largest group first.
     pub cycles: Vec<Cycle>,
     /// Modules that contain functions.
     pub modules: usize,
 }
 
-impl Health {
+impl Maintainability {
     pub fn new(project: &Project, calls: &CallGraph) -> Self {
         Self::with_limits(project, calls, Limits::default())
     }
 
     pub fn with_limits(project: &Project, calls: &CallGraph, limits: Limits) -> Self {
-        let mut functions: Vec<FnHealth> = project
+        let mut functions: Vec<FnMeasures> = project
             .functions
             .iter()
             .enumerate()
             .filter_map(|(i, func)| {
                 let body = func.body.as_ref()?;
-                Some(FnHealth::new(FnId(i as u32), func, body))
+                Some(FnMeasures::new(FnId(i as u32), func, body))
             })
             .collect();
         functions.sort_by(|a, b| {
@@ -276,7 +276,7 @@ impl Health {
                 .total_cmp(&a.excess(&limits))
                 .then(a.f.cmp(&b.f))
         });
-        Health {
+        Maintainability {
             limits,
             functions,
             files: files(project),
@@ -289,11 +289,11 @@ impl Health {
         }
     }
 
-    pub fn fn_level(&self, f: &FnHealth) -> Level {
+    pub fn fn_level(&self, f: &FnMeasures) -> Level {
         f.level(&self.limits)
     }
 
-    pub fn file_level(&self, f: &FileHealth) -> Level {
+    pub fn file_level(&self, f: &FileMeasures) -> Level {
         self.limits.file_lines.level(f.lines)
     }
 
@@ -336,7 +336,7 @@ impl Health {
     }
 
     /// Functions and files over a limit plus module cycles: what a strict
-    /// check (`--health-gate`) does not accept.
+    /// check (`--gate`) does not accept.
     pub fn violations(&self) -> usize {
         let fns = self
             .functions
@@ -351,13 +351,13 @@ impl Health {
 }
 
 /// Files that hold analyzed modules, longest first.
-fn files(project: &Project) -> Vec<FileHealth> {
+fn files(project: &Project) -> Vec<FileMeasures> {
     let mut ids: Vec<FileId> = project.modules.iter().map(|m| m.file).collect();
     ids.sort();
     ids.dedup();
-    let mut files: Vec<FileHealth> = ids
+    let mut files: Vec<FileMeasures> = ids
         .into_iter()
-        .map(|file| FileHealth {
+        .map(|file| FileMeasures {
             file,
             lines: project.file(file).text.lines().count() as u32,
         })

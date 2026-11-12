@@ -51,16 +51,16 @@ struct Cli {
     #[arg(long, num_args = 0..=1, default_missing_value = "-", value_name = "FILE")]
     report: Option<PathBuf>,
 
-    /// Write the code health of the project as Markdown to FILE or, without
+    /// Write the maintainability of the project as Markdown to FILE or, without
     /// FILE, to stdout, instead of opening a window: score, and the
     /// functions, files and module cycles over the targets.
     #[arg(long, num_args = 0..=1, default_missing_value = "-", value_name = "FILE")]
-    health: Option<PathBuf>,
+    maintainability: Option<PathBuf>,
 
-    /// With `--health`: exit with status 1 if a function or file is over a
+    /// With `--maintainability`: exit with status 1 if a function or file is over a
     /// limit or modules call each other in a cycle (for CI).
-    #[arg(long, requires = "health")]
-    health_gate: bool,
+    #[arg(long, requires = "maintainability")]
+    gate: bool,
 }
 
 #[derive(Subcommand)]
@@ -90,8 +90,8 @@ fn main() -> anyhow::Result<()> {
         let project = rv_syn::load(&project_path())?;
         return write_text(out, &rv_analysis::report(&project));
     }
-    if let Some(out) = &cli.health {
-        return health(&project_path(), out, cli.health_gate);
+    if let Some(out) = &cli.maintainability {
+        return maintainability(&project_path(), out, cli.gate);
     }
     if let Some(dir) = &cli.export {
         for file in rv_gui::export_all(&project_path(), dir, cli.select.as_deref())? {
@@ -111,16 +111,19 @@ fn main() -> anyhow::Result<()> {
     .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
-/// `--health`: writes the health report; with `gate`, findings over a limit
+/// `--maintainability`: writes the maintainability report; with `gate`, findings over a limit
 /// end the process with status 1.
-fn health(path: &Path, out: &Path, gate: bool) -> anyhow::Result<()> {
+fn maintainability(path: &Path, out: &Path, gate: bool) -> anyhow::Result<()> {
     let project = rv_syn::load(path)?;
     let calls = rv_analysis::CallGraph::new(&project);
-    let health = rv_analysis::Health::new(&project, &calls);
-    write_text(out, &rv_analysis::health_report(&project, &health))?;
-    let violations = health.violations();
+    let maintainability = rv_analysis::Maintainability::new(&project, &calls);
+    write_text(
+        out,
+        &rv_analysis::maintainability_report(&project, &maintainability),
+    )?;
+    let violations = maintainability.violations();
     if gate && violations > 0 {
-        eprintln!("code health: {violations} finding(s) over a limit");
+        eprintln!("maintainability: {violations} finding(s) over a limit");
         std::process::exit(1);
     }
     Ok(())

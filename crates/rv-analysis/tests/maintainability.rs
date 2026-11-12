@@ -1,7 +1,9 @@
-//! Code health: measures of functions, module cycles and the score.
+//! Maintainability: measures of functions, module cycles and the score.
 
-use rv_analysis::health::{Health, Level, Limit, Limits, Measure, complexity, nesting};
-use rv_analysis::{CallGraph, health_report};
+use rv_analysis::maintainability::{
+    Level, Limit, Limits, Maintainability, Measure, complexity, nesting,
+};
+use rv_analysis::{CallGraph, maintainability_report};
 
 fn body_of(src: &str) -> rv_ir::Body {
     let p = rv_syn::load_str(src);
@@ -66,35 +68,35 @@ fn many(a: u8, b: u8, c: u8, d: u8, e: u8, f: u8, g: u8, h: u8) {}
 #[test]
 fn finds_module_cycles_and_their_links() {
     let p = rv_syn::load_str(CYCLE);
-    let health = Health::new(&p, &CallGraph::new(&p));
-    assert_eq!(health.cycles.len(), 1);
-    let names: Vec<String> = health.cycles[0]
+    let maintainability = Maintainability::new(&p, &CallGraph::new(&p));
+    assert_eq!(maintainability.cycles.len(), 1);
+    let names: Vec<String> = maintainability.cycles[0]
         .modules
         .iter()
         .map(|&m| p.module(m).qual_name())
         .collect();
     assert_eq!(names, ["snippet::a", "snippet::b"]);
-    assert_eq!(health.cycles[0].links.len(), 2);
-    assert_eq!(health.modules_in_cycles(), 2);
+    assert_eq!(maintainability.cycles[0].links.len(), 2);
+    assert_eq!(maintainability.modules_in_cycles(), 2);
 }
 
 #[test]
 fn score_and_report() {
     let p = rv_syn::load_str(CYCLE);
-    let health = Health::new(&p, &CallGraph::new(&p));
-    let worst = health.functions[0];
+    let maintainability = Maintainability::new(&p, &CallGraph::new(&p));
+    let worst = maintainability.functions[0];
     assert_eq!(p.function(worst.f).name, "many");
     assert_eq!(worst.value(Measure::Params), 8);
-    assert_eq!(health.fn_level(&worst), Level::OverLimit);
+    assert_eq!(maintainability.fn_level(&worst), Level::OverLimit);
     // One function over a limit and one cycle.
-    assert_eq!(health.violations(), 2);
-    let score = health.score();
+    assert_eq!(maintainability.violations(), 2);
+    let score = maintainability.score();
     assert!(score.functions < 100 && score.modules < 100, "{score:?}");
     assert_eq!(score.files, 100);
 
-    let text = health_report(&p, &health);
+    let text = maintainability_report(&p, &maintainability);
     for expected in [
-        "# RustView code health",
+        "# RustView maintainability",
         "### Over a limit (1)",
         "`snippet::many` (snippet.rs:12): 1 lines, **8 parameters**",
         "- `snippet::a`, `snippet::b`",
@@ -105,11 +107,11 @@ fn score_and_report() {
 }
 
 #[test]
-fn healthy_code_scores_full() {
+fn clean_code_scores_full() {
     let p = rv_syn::load_str("fn main() { helper(); }\nfn helper() {}");
-    let health = Health::with_limits(&p, &CallGraph::new(&p), Limits::default());
-    assert_eq!(health.violations(), 0);
-    assert_eq!(health.score().total, 100);
-    assert_eq!(health.score().grade(), 'A');
-    assert!(health_report(&p, &health).contains("None: no group"));
+    let maintainability = Maintainability::with_limits(&p, &CallGraph::new(&p), Limits::default());
+    assert_eq!(maintainability.violations(), 0);
+    assert_eq!(maintainability.score().total, 100);
+    assert_eq!(maintainability.score().grade(), 'A');
+    assert!(maintainability_report(&p, &maintainability).contains("None: no group"));
 }

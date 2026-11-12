@@ -3,8 +3,8 @@
 
 pub mod concurrency;
 pub mod dataflow;
-pub mod health;
 mod locate;
+pub mod maintainability;
 pub mod modules;
 pub mod program;
 pub mod query;
@@ -14,7 +14,7 @@ pub use concurrency::{
     Channel, ChannelUse, Concurrency, End, SharedGroup, SharedUse, Spawn, SpawnKind, concurrency,
 };
 pub use dataflow::{Binding, DataFlow, Edge, EdgeKind, data_flow};
-pub use health::{Health, health_report};
+pub use maintainability::{Maintainability, maintainability_report};
 pub use modules::{ModuleEdge, ModuleGraph, ModuleNode, crates, module_graph};
 pub use program::{
     CallGraph, ChannelComm, Facts, JoinComm, Link, LinkKind, Program, Resource, SharedComm, Site,

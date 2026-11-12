@@ -581,7 +581,7 @@ impl Report<'_> {
                 Some((
                     FnId(i as u32),
                     f.span.line_count(),
-                    crate::health::nesting(body),
+                    crate::maintainability::nesting(body),
                 ))
             })
             .collect();
