@@ -1,11 +1,12 @@
-//! The Markdown project report (`--report`) as a tab: formatted, with
-//! `file:line` locations and function names as links.
-
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+//! The Markdown outputs (`--report`, `--maintainability`) as tabs:
+//! formatted, with `file:line` locations and function names as links.
 
 use egui::{RichText, Ui};
 use rv_ir::{FileId, FnId, Project};
+
+mod parse;
+
+use parse::{Block, BlockKind, Seg, base_dir, parse};
 
 pub enum ReportAction {
     None,
@@ -16,8 +17,38 @@ pub enum ReportAction {
     Message(String),
 }
 
-#[derive(Default)]
+/// Which text a [`ReportView`] shows.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ReportKind {
+    /// Threads, communication, modules and hot spots.
+    Report,
+    /// Score and the functions, files and module cycles over their targets.
+    Maintainability,
+}
+
+impl ReportKind {
+    /// Name in messages and file names, and the command line option.
+    fn name(self) -> &'static str {
+        match self {
+            ReportKind::Report => "report",
+            ReportKind::Maintainability => "maintainability",
+        }
+    }
+
+    fn text(self, project: &Project) -> String {
+        match self {
+            ReportKind::Report => rv_analysis::report(project),
+            ReportKind::Maintainability => {
+                let calls = rv_analysis::CallGraph::new(project);
+                let found = rv_analysis::Maintainability::new(project, &calls);
+                rv_analysis::maintainability_report(project, &found)
+            }
+        }
+    }
+}
+
 pub struct ReportView {
+    kind: ReportKind,
     /// Project generation the report was made for.
     generation: Option<u64>,
     text: String,
@@ -26,54 +57,60 @@ pub struct ReportView {
     pending: bool,
 }
 
-enum BlockKind {
-    Title,
-    Heading,
-    Subheading,
-    /// List item with indent level.
-    Item(usize),
-    Paragraph,
-    Gap,
-}
-
-struct Block {
-    kind: BlockKind,
-    segs: Vec<Seg>,
-}
-
-enum Seg {
-    Text(String),
-    Bold(String),
-    Code(String, Option<FnId>),
-    Loc(String, FileId, u32),
-}
-
 impl ReportView {
+    pub fn new(kind: ReportKind) -> Self {
+        ReportView {
+            kind,
+            generation: None,
+            text: String::new(),
+            blocks: Vec::new(),
+            pending: false,
+        }
+    }
+
     pub fn ui(&mut self, ui: &mut Ui, project: &Project, generation: u64) -> ReportAction {
-        let mut action = ReportAction::None;
         if self.generation != Some(generation) && !self.pending {
             self.pending = true;
             ui.ctx().request_repaint();
         } else if self.pending {
             let started = std::time::Instant::now();
-            self.text = rv_analysis::report(project);
+            self.text = self.kind.text(project);
             self.blocks = parse(project, &self.text);
             self.generation = Some(generation);
             self.pending = false;
-            log::info!("report generated in {:?}", started.elapsed());
+            log::info!("{} generated in {:?}", self.kind.name(), started.elapsed());
         }
         if self.pending {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label("generating the report…");
+                ui.label(format!("generating the {}…", self.kind.name()));
             });
-            return action;
+            return ReportAction::None;
         }
 
+        let mut action = self.toolbar(ui, project);
+        ui.separator();
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.set_max_width(ui.available_width().min(1100.0));
+                for (i, block) in self.blocks.iter().enumerate() {
+                    if let Some(a) = draw_block(ui, block, i) {
+                        action = a;
+                    }
+                }
+            });
+        action
+    }
+
+    /// Save, copy and regenerate.
+    fn toolbar(&mut self, ui: &mut Ui, project: &Project) -> ReportAction {
+        let mut action = ReportAction::None;
         ui.horizontal_wrapped(|ui| {
             if ui
                 .button("Save…")
-                .on_hover_text("Save the report as Markdown")
+                .on_hover_text("Save the text as Markdown")
                 .clicked()
             {
                 action = self.save(project);
@@ -84,28 +121,18 @@ impl ReportView {
                 .clicked()
             {
                 ui.ctx().copy_text(self.text.clone());
-                action = ReportAction::Message("report copied to the clipboard".into());
+                action =
+                    ReportAction::Message(format!("{} copied to the clipboard", self.kind.name()));
             }
             if ui.button("Regenerate").clicked() {
                 self.pending = true;
             }
             ui.weak(format!(
-                "{} KB · also `rustview <project> --report` · click a location to show the code",
-                self.text.len().div_ceil(1024)
+                "{} KB · also `rustview <project> --{}` · click a location to show the code",
+                self.text.len().div_ceil(1024),
+                self.kind.name()
             ));
         });
-        ui.separator();
-
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.set_max_width(ui.available_width().min(1100.0));
-                for block in &self.blocks {
-                    if let Some(a) = draw_block(ui, block) {
-                        action = a;
-                    }
-                }
-            });
         action
     }
 
@@ -114,13 +141,14 @@ impl ReportView {
             .file_name()
             .map(|n| {
                 format!(
-                    "{}_report.md",
-                    crate::export::file_name(&n.to_string_lossy())
+                    "{}_{}.md",
+                    crate::export::file_name(&n.to_string_lossy()),
+                    self.kind.name()
                 )
             })
-            .unwrap_or_else(|| "report.md".into());
+            .unwrap_or_else(|| format!("{}.md", self.kind.name()));
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Save report")
+            .set_title(format!("Save {}", self.kind.name()))
             .set_file_name(name)
             .add_filter("Markdown", &["md"])
             .save_file()
@@ -134,294 +162,96 @@ impl ReportView {
     }
 }
 
-fn draw_block(ui: &mut Ui, block: &Block) -> Option<ReportAction> {
+/// `index` is the position of the block in the text (for widget ids).
+fn draw_block(ui: &mut Ui, block: &Block, index: usize) -> Option<ReportAction> {
     let mut action = None;
-    let mut segs = |ui: &mut Ui, size: Option<f32>, strong: bool| {
-        for seg in &block.segs {
-            let sized = |t: RichText| match size {
-                Some(s) => t.size(s),
-                None => t,
-            };
-            match seg {
-                Seg::Text(t) => {
-                    let t = sized(RichText::new(t));
-                    ui.label(if strong { t.strong() } else { t });
-                }
-                Seg::Bold(t) => {
-                    ui.label(sized(RichText::new(t).strong()));
-                }
-                Seg::Code(t, None) => {
-                    ui.label(sized(RichText::new(t).code()));
-                }
-                Seg::Code(t, Some(f)) => {
-                    if ui
-                        .link(sized(RichText::new(t).code()))
-                        .on_hover_text("show the function")
-                        .clicked()
-                    {
-                        action = Some(ReportAction::ShowFn(*f));
-                    }
-                }
-                Seg::Loc(t, file, line) => {
-                    if ui
-                        .link(t.as_str())
-                        .on_hover_text("show in the code")
-                        .clicked()
-                    {
-                        action = Some(ReportAction::Goto(*file, *line));
-                    }
-                }
-            }
-        }
-    };
-    match block.kind {
+    let segs = &block.segs;
+    match &block.kind {
+        BlockKind::Table(rows) => action = draw_table(ui, rows, index),
         BlockKind::Gap => {
             ui.add_space(6.0);
         }
         BlockKind::Title => {
-            ui.horizontal_wrapped(|ui| segs(ui, Some(22.0), true));
+            ui.horizontal_wrapped(|ui| action = draw_segs(ui, segs, Some(22.0), true));
         }
         BlockKind::Heading => {
             ui.add_space(6.0);
-            ui.horizontal_wrapped(|ui| segs(ui, Some(18.0), true));
+            ui.horizontal_wrapped(|ui| action = draw_segs(ui, segs, Some(18.0), true));
             ui.separator();
         }
         BlockKind::Subheading => {
-            ui.horizontal_wrapped(|ui| segs(ui, Some(15.0), true));
+            ui.horizontal_wrapped(|ui| action = draw_segs(ui, segs, Some(15.0), true));
         }
         BlockKind::Item(level) => {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
-                ui.add_space(8.0 + 18.0 * level as f32);
-                ui.label(if level == 0 { "•  " } else { "◦  " });
-                segs(ui, None, false);
+                ui.add_space(8.0 + 18.0 * *level as f32);
+                ui.label(if *level == 0 { "•  " } else { "◦  " });
+                action = draw_segs(ui, segs, None, false);
             });
         }
         BlockKind::Paragraph => {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
-                segs(ui, None, false);
+                action = draw_segs(ui, segs, None, false);
             });
         }
     }
     action
 }
 
-fn base_dir(root: &Path) -> PathBuf {
-    if root.is_file() {
-        root.parent().map(Path::to_path_buf).unwrap_or_default()
-    } else {
-        root.to_path_buf()
-    }
-}
-
-/// Lookup tables for links.
-struct Targets {
-    /// Path relative to the project directory (with `/`) -> file.
-    files: HashMap<String, FileId>,
-    /// Qualified path and unique `Type::name` / `module::name` suffixes -> function.
-    functions: HashMap<String, Option<FnId>>,
-}
-
-impl Targets {
-    fn new(project: &Project) -> Self {
-        let base = base_dir(&project.root);
-        let files = project
-            .files
-            .iter()
-            .enumerate()
-            .map(|(i, f)| {
-                let rel = f.path.strip_prefix(&base).unwrap_or(&f.path);
-                (rel.to_string_lossy().replace('\\', "/"), FileId(i as u32))
-            })
-            .collect();
-        let mut functions: HashMap<String, Option<FnId>> = HashMap::new();
-        for (i, f) in project.functions.iter().enumerate() {
-            let id = FnId(i as u32);
-            functions.insert(f.qual_path.clone(), Some(id));
-            let parts: Vec<&str> = f.qual_path.rsplitn(3, "::").collect();
-            if let [last, prev, _] = parts.as_slice() {
-                // Ambiguous short names get no link.
-                functions
-                    .entry(format!("{prev}::{last}"))
-                    .and_modify(|e| {
-                        if *e != Some(id) {
-                            *e = None
-                        }
-                    })
-                    .or_insert(Some(id));
-            }
-        }
-        // Full paths win over equal short names of other functions.
-        for (i, f) in project.functions.iter().enumerate() {
-            functions.insert(f.qual_path.clone(), Some(FnId(i as u32)));
-        }
-        Targets { files, functions }
-    }
-}
-
-fn parse(project: &Project, text: &str) -> Vec<Block> {
-    let targets = Targets::new(project);
-    let mut blocks = Vec::new();
-    let mut in_fence = false;
-    for line in text.lines() {
-        if line.starts_with("```") {
-            in_fence = !in_fence;
-            continue;
-        }
-        if in_fence {
-            blocks.push(Block {
-                kind: BlockKind::Paragraph,
-                segs: vec![Seg::Code(line.to_string(), None)],
-            });
-            continue;
-        }
-        let trimmed = line.trim_start();
-        let indent = (line.len() - trimmed.len()) / 2;
-        let (kind, rest) = if let Some(r) = line.strip_prefix("### ") {
-            (BlockKind::Subheading, r)
-        } else if let Some(r) = line.strip_prefix("## ") {
-            (BlockKind::Heading, r)
-        } else if let Some(r) = line.strip_prefix("# ") {
-            (BlockKind::Title, r)
-        } else if let Some(r) = trimmed.strip_prefix("- ") {
-            (BlockKind::Item(indent), r)
-        } else if trimmed.is_empty() {
-            (BlockKind::Gap, "")
-        } else {
-            (BlockKind::Paragraph, trimmed)
-        };
-        blocks.push(Block {
-            kind,
-            segs: inline(rest, &targets),
-        });
-    }
-    blocks
-}
-
-/// Splits a line into text, `**bold**`, `` `code` `` and `file.rs:12, 40` locations.
-fn inline(text: &str, targets: &Targets) -> Vec<Seg> {
-    let mut segs = Vec::new();
-    let mut rest = text;
-    while !rest.is_empty() {
-        let code = rest.find('`');
-        let bold = rest.find("**");
-        match (code, bold) {
-            (Some(c), b) if b.is_none_or(|b| c < b) => {
-                locations(&rest[..c], targets, &mut segs);
-                let after = &rest[c + 1..];
-                let end = after.find('`').unwrap_or(after.len());
-                let code = &after[..end];
-                let f = targets.functions.get(code).copied().flatten();
-                segs.push(Seg::Code(code.to_string(), f));
-                rest = after.get(end + 1..).unwrap_or("");
-            }
-            (_, Some(b)) => {
-                locations(&rest[..b], targets, &mut segs);
-                let after = &rest[b + 2..];
-                let end = after.find("**").unwrap_or(after.len());
-                let inner = &after[..end];
-                // `**`code`**`: keep the code (and its link), shown as is.
-                if inner.starts_with('`') {
-                    segs.extend(inline(inner, targets));
-                } else {
-                    segs.push(Seg::Bold(inner.to_string()));
+fn draw_table(ui: &mut Ui, rows: &[Vec<Vec<Seg>>], index: usize) -> Option<ReportAction> {
+    let mut action = None;
+    egui::Grid::new(("report_table", index))
+        .striped(true)
+        .spacing([18.0, 4.0])
+        .show(ui, |ui| {
+            for (r, row) in rows.iter().enumerate() {
+                for cell in row {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        action = draw_segs(ui, cell, None, r == 0).or(action.take());
+                    });
                 }
-                rest = after.get(end + 2..).unwrap_or("");
+                ui.end_row();
             }
-            _ => {
-                locations(rest, targets, &mut segs);
-                rest = "";
+        });
+    action
+}
+
+/// The segments of a block in a row; `size` and `strong` are those of
+/// headings. Returns what a clicked link asks for.
+fn draw_segs(ui: &mut Ui, segs: &[Seg], size: Option<f32>, strong: bool) -> Option<ReportAction> {
+    let mut action = None;
+    let sized = |t: RichText| match size {
+        Some(s) => t.size(s),
+        None => t,
+    };
+    for seg in segs {
+        match seg {
+            Seg::Text(t) => {
+                let t = sized(RichText::new(t));
+                ui.label(if strong { t.strong() } else { t });
+            }
+            Seg::Bold(t) => {
+                ui.label(sized(RichText::new(t).strong()));
+            }
+            Seg::Code(t, None) => {
+                ui.label(sized(RichText::new(t).code()));
+            }
+            Seg::Code(t, Some(f)) => {
+                let link = ui.link(sized(RichText::new(t).code()));
+                if link.on_hover_text("show the function").clicked() {
+                    action = Some(ReportAction::ShowFn(*f));
+                }
+            }
+            Seg::Loc(t, file, line) => {
+                let link = ui.link(t.as_str());
+                if link.on_hover_text("show in the code").clicked() {
+                    action = Some(ReportAction::Goto(*file, *line));
+                }
             }
         }
     }
-    segs
-}
-
-/// Plain text with `path.rs:12` and following `, 40, 41` line numbers as links.
-fn locations(text: &str, targets: &Targets, segs: &mut Vec<Seg>) {
-    let mut plain = String::new();
-    let mut rest = text;
-    while let Some(i) = rest.find(".rs:") {
-        let start = rest[..i]
-            .rfind(|c: char| c.is_whitespace() || c == '(')
-            .map_or(0, |s| s + 1);
-        let digits = rest[i + 4..]
-            .find(|c: char| !c.is_ascii_digit())
-            .unwrap_or(rest.len() - i - 4);
-        let path = &rest[start..i + 3];
-        let (Some(&file), Ok(line)) = (
-            targets.files.get(path),
-            rest[i + 4..i + 4 + digits].parse::<u32>(),
-        ) else {
-            plain.push_str(&rest[..i + 4]);
-            rest = &rest[i + 4..];
-            continue;
-        };
-        plain.push_str(&rest[..start]);
-        push_text(segs, &mut plain);
-        segs.push(Seg::Loc(
-            rest[start..i + 4 + digits].to_string(),
-            file,
-            line,
-        ));
-        rest = &rest[i + 4 + digits..];
-        // More lines of the same file: `(src/a.rs:12, 40, 41)`.
-        while let Some(more) = rest.strip_prefix(", ") {
-            let n = more
-                .find(|c: char| !c.is_ascii_digit())
-                .unwrap_or(more.len());
-            let Ok(line) = more[..n].parse::<u32>() else {
-                break;
-            };
-            segs.push(Seg::Text(", ".into()));
-            segs.push(Seg::Loc(more[..n].to_string(), file, line));
-            rest = &more[n..];
-        }
-    }
-    plain.push_str(rest);
-    push_text(segs, &mut plain);
-}
-
-fn push_text(segs: &mut Vec<Seg>, plain: &mut String) {
-    if !plain.is_empty() {
-        segs.push(Seg::Text(std::mem::take(plain)));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn locations_and_code_become_links() {
-        let p = rv_syn::load_str("fn main() {}\nfn helfer() {}\n");
-        let targets = Targets::new(&p);
-        let segs = inline(
-            "**`main`** at snippet.rs:1, 2 in `snippet::helfer` (other.rs:3)",
-            &targets,
-        );
-        let shown: Vec<String> = segs
-            .iter()
-            .map(|s| match s {
-                Seg::Text(t) => format!("T({t})"),
-                Seg::Bold(t) => format!("B({t})"),
-                Seg::Code(t, f) => format!("C({t},{})", f.is_some()),
-                Seg::Loc(t, _, l) => format!("L({t}={l})"),
-            })
-            .collect();
-        assert_eq!(
-            shown,
-            [
-                "C(main,false)",
-                "T( at )",
-                "L(snippet.rs:1=1)",
-                "T(, )",
-                "L(2=2)",
-                "T( in )",
-                "C(snippet::helfer,true)",
-                "T( (other.rs:3))",
-            ]
-        );
-    }
+    action
 }

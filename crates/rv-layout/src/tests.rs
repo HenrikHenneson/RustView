@@ -1,3 +1,5 @@
+use rv_ir::NodeKind;
+
 use super::*;
 
 const METRICS: Metrics = Metrics {
@@ -74,9 +76,11 @@ fn everything_nested_and_disjoint_in_both_orientations() {
     for orientation in [Orientation::Vertical, Orientation::Horizontal] {
         let l = layout(
             &body,
-            &state,
-            &all_expanded(&body),
-            orientation,
+            View {
+                state: &state,
+                defaults: &all_expanded(&body),
+                orientation,
+            },
             METRICS,
             &Notes::new(),
         );
@@ -100,9 +104,11 @@ fn sequence_follows_orientation() {
     ] {
         let l = layout(
             &body,
-            &ViewState::default(),
-            &all_expanded(&body),
-            orientation,
+            View {
+                state: &ViewState::default(),
+                defaults: &all_expanded(&body),
+                orientation,
+            },
             METRICS,
             &Notes::new(),
         );
@@ -123,9 +129,11 @@ fn collapsed_structures_hide_their_content() {
     let only_root = HashSet::from([body.root]);
     let l = layout(
         &body,
-        &ViewState::default(),
-        &only_root,
-        Orientation::Vertical,
+        View {
+            state: &ViewState::default(),
+            defaults: &only_root,
+            orientation: Orientation::Vertical,
+        },
         METRICS,
         &Notes::new(),
     );
@@ -148,9 +156,11 @@ fn many_cases_show_one_at_a_time() {
     let body = body();
     let l = layout(
         &body,
-        &ViewState::default(),
-        &all_expanded(&body),
-        Orientation::Vertical,
+        View {
+            state: &ViewState::default(),
+            defaults: &all_expanded(&body),
+            orientation: Orientation::Vertical,
+        },
         METRICS,
         &Notes::new(),
     );
@@ -172,9 +182,11 @@ fn many_cases_show_one_at_a_time() {
     state.case_index.insert(m, 4);
     let l = layout(
         &body,
-        &state,
-        &all_expanded(&body),
-        Orientation::Vertical,
+        View {
+            state: &state,
+            defaults: &all_expanded(&body),
+            orientation: Orientation::Vertical,
+        },
         METRICS,
         &Notes::new(),
     );
@@ -204,9 +216,11 @@ fn exits_are_summarized_at_their_target() {
     let body = body();
     let l = layout(
         &body,
-        &ViewState::default(),
-        &all_expanded(&body),
-        Orientation::Vertical,
+        View {
+            state: &ViewState::default(),
+            defaults: &all_expanded(&body),
+            orientation: Orientation::Vertical,
+        },
         METRICS,
         &Notes::new(),
     );
@@ -231,9 +245,11 @@ fn expression_level_puts_operands_left_of_operations() {
     state.expressions.insert(body.root);
     let l = layout(
         &body,
-        &state,
-        &all_expanded(&body),
-        Orientation::Vertical,
+        View {
+            state: &state,
+            defaults: &all_expanded(&body),
+            orientation: Orientation::Vertical,
+        },
         METRICS,
         &Notes::new(),
     );
@@ -256,9 +272,11 @@ fn expression_level_puts_operands_left_of_operations() {
     // Without the switch there are none.
     let plain = layout(
         &body,
-        &ViewState::default(),
-        &all_expanded(&body),
-        Orientation::Vertical,
+        View {
+            state: &ViewState::default(),
+            defaults: &all_expanded(&body),
+            orientation: Orientation::Vertical,
+        },
         METRICS,
         &Notes::new(),
     );

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 mod app;
 mod callgraph_view;
+mod canvas;
 mod code_view;
 mod comm_view;
 mod diagram;
@@ -12,15 +13,25 @@ mod export;
 mod headless;
 mod highlight;
 mod loader;
+mod lookup;
 mod program_view;
 mod report_view;
+mod style;
 mod threads;
 mod tree;
+mod widgets;
 mod window_frame;
 mod wires;
 
 pub use editor::{DEFAULT_TEMPLATE as DEFAULT_EDITOR, EditorCommand};
-pub use headless::{export_all, report};
+pub use headless::export_all;
+
+/// A text tab to start with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StartTab {
+    Report,
+    Maintainability,
+}
 
 pub struct Options {
     /// Cargo project directory or single `.rs` file; `None` shows the start screen.
@@ -35,6 +46,8 @@ pub struct Options {
     pub callgraph: Option<String>,
     /// Expression level for whole functions from the start.
     pub expressions: bool,
+    /// Start with this tab instead of the diagram.
+    pub tab: Option<StartTab>,
 }
 
 pub fn run(options: Options) -> eframe::Result {

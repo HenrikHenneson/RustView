@@ -21,7 +21,7 @@ const INSTRUCTIONS: &str = "Structure of the Rust project in the working directo
 syntactic analysis (macros not expanded, names resolved by heuristics): threads and who starts \
 them, channels, shared state, call graph and the nesting of functions. Start with `report` (or \
 `threads` for concurrency questions) to get the map of the project, then ask `find`, `callers`, \
-`callees`, `threads_of` or `outline` about single names. Answers carry file:line references — \
+`callees`, `threads_of` or `outline` about single names; `maintainability` lists what is too long, too \nnested or tangled. Answers carry file:line references — \
 read the code there before relying on a detail.";
 
 /// Serves the project at `root` over stdin/stdout until the client closes it.
@@ -185,6 +185,19 @@ impl RustViewServer {
                 &l.calls,
                 &l.programs,
                 parts,
+            ))
+        }))
+    }
+
+    #[tool(
+        description = "Maintainability of the project as Markdown: a 0-100 score and the functions         (length, branching complexity, nesting depth, parameters), files and module call cycles         over their targets and limits, worst first with file:line. Use it to decide what to         refactor, and after a change to check that no new finding appeared."
+    )]
+    async fn maintainability(&self) -> Result<CallToolResult, McpError> {
+        answer(self.with(|l| {
+            let maintainability = rv_analysis::Maintainability::new(&l.project, &l.calls);
+            Ok(rv_analysis::maintainability_report(
+                &l.project,
+                &maintainability,
             ))
         }))
     }

@@ -8,7 +8,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+rv-analysis.workspace = true
 rv-gui.workspace = true
+rv-syn.workspace = true
 rv-mcp.workspace = true
 anyhow.workspace = true
 env_logger.workspace = true

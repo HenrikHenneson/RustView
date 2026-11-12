@@ -4,6 +4,7 @@ use rv_ir::{ExprKind, ExprNode, ExprTree, FileId, NodeId, Span};
 use syn::spanned::Spanned;
 
 use crate::source::Parsed;
+use crate::text::{one_line, short};
 use crate::vars;
 
 /// Larger expressions are cut: the rest is shown as text.
@@ -53,7 +54,7 @@ impl<'a> TreeBuilder<'a> {
         let span = self.span(span);
         self.nodes.push(ExprNode {
             kind,
-            text: short(&text.into()),
+            text: short(&text.into(), MAX_TEXT),
             children,
             span,
         });
@@ -61,7 +62,7 @@ impl<'a> TreeBuilder<'a> {
     }
 
     fn text(&self, s: proc_macro2::Span) -> String {
-        crate::body::one_line(&self.p.text_of(s))
+        one_line(&self.p.text_of(s))
     }
 
     /// `let pattern = init`
@@ -118,156 +119,125 @@ impl<'a> TreeBuilder<'a> {
         match e {
             syn::Expr::Paren(p) => self.expr(&p.expr),
             syn::Expr::Group(g) => self.expr(&g.expr),
-            syn::Expr::Path(p) => match vars::local_name(p) {
-                Some(name) => self.node(ExprKind::Var, name, Vec::new(), span),
-                None => {
-                    let segs = vars::segments(&p.path);
-                    let text = segs[segs.len().saturating_sub(2)..].join("::");
-                    self.node(ExprKind::Literal, text, Vec::new(), span)
-                }
-            },
-            syn::Expr::Lit(_) => {
-                let t = self.text(span);
-                self.node(ExprKind::Literal, t, Vec::new(), span)
-            }
-            syn::Expr::Call(c) => {
-                let (text, mut children) = match &*c.func {
-                    syn::Expr::Path(p) => {
-                        let segs = vars::segments(&p.path);
-                        (
-                            format!("{}()", segs[segs.len().saturating_sub(2)..].join("::")),
-                            Vec::new(),
-                        )
-                    }
-                    other => ("call".to_string(), vec![self.expr(other)]),
-                };
-                for a in &c.args {
-                    children.push(self.expr(a));
-                }
-                self.node(ExprKind::Call, text, children, span)
-            }
-            syn::Expr::MethodCall(m) => {
-                let mut children = vec![self.expr(&m.receiver)];
-                for a in &m.args {
-                    children.push(self.expr(a));
-                }
-                self.node(ExprKind::Method, format!(".{}()", m.method), children, span)
-            }
             syn::Expr::Macro(m) => self.macro_node(&m.mac, span),
+            _ => {
+                let (kind, text, operands) = self
+                    .operation(e)
+                    .or_else(|| construction(e))
+                    .unwrap_or_else(|| self.leaf(e));
+                let children = operands.into_iter().map(|x| self.expr(x)).collect();
+                self.node(kind, text, children, span)
+            }
+        }
+    }
+
+    /// Kind, text and operands of an expression that computes something from
+    /// other expressions: calls, operators, access, conversion, exits.
+    fn operation<'e>(&self, e: &'e syn::Expr) -> Option<Parts<'e>> {
+        let parts = match e {
+            syn::Expr::Call(c) => call_parts(c),
+            syn::Expr::MethodCall(m) => {
+                let operands = std::iter::once(&*m.receiver).chain(&m.args).collect();
+                (ExprKind::Method, format!(".{}()", m.method), operands)
+            }
             syn::Expr::Binary(b) => {
                 let op = self.text(b.op.span());
-                let (l, r) = (self.expr(&b.left), self.expr(&b.right));
                 let kind = if op.ends_with('=') && !matches!(op.as_str(), "==" | "!=" | "<=" | ">=")
                 {
                     ExprKind::Assign
                 } else {
                     ExprKind::Operator
                 };
-                self.node(kind, op, vec![l, r], span)
+                (kind, op, vec![&*b.left, &*b.right])
             }
-            syn::Expr::Assign(a) => {
-                let (l, r) = (self.expr(&a.left), self.expr(&a.right));
-                self.node(ExprKind::Assign, "=", vec![l, r], span)
-            }
-            syn::Expr::Unary(u) => {
-                let op = self.text(u.op.span());
-                let c = self.expr(&u.expr);
-                self.node(ExprKind::Operator, op, vec![c], span)
+            syn::Expr::Assign(a) => (ExprKind::Assign, "=".into(), vec![&*a.left, &*a.right]),
+            syn::Expr::Unary(u) => (ExprKind::Operator, self.text(u.op.span()), vec![&*u.expr]),
+            syn::Expr::Range(r) => {
+                let operands = r.start.iter().chain(&r.end).map(|x| &**x).collect();
+                (ExprKind::Operator, "..".into(), operands)
             }
             syn::Expr::Field(f) => {
-                let member = match &f.member {
-                    syn::Member::Named(id) => id.to_string(),
-                    syn::Member::Unnamed(i) => i.index.to_string(),
-                };
-                let c = self.expr(&f.base);
-                self.node(ExprKind::Field, format!(".{member}"), vec![c], span)
+                let text = format!(".{}", vars::member_name(&f.member));
+                (ExprKind::Field, text, vec![&*f.base])
             }
-            syn::Expr::Index(i) => {
-                let (b, x) = (self.expr(&i.expr), self.expr(&i.index));
-                self.node(ExprKind::Index, "[ ]", vec![b, x], span)
-            }
-            syn::Expr::Struct(st) => {
-                let name = st
-                    .path
-                    .segments
-                    .last()
-                    .map(|s| s.ident.to_string())
-                    .unwrap_or_default();
-                let children = st.fields.iter().map(|f| self.expr(&f.expr)).collect();
-                self.node(ExprKind::Construct, format!("{name} {{}}"), children, span)
-            }
-            syn::Expr::Tuple(t) => {
-                let children = t.elems.iter().map(|x| self.expr(x)).collect();
-                self.node(ExprKind::Construct, "( )", children, span)
-            }
-            syn::Expr::Array(a) => {
-                let children = a.elems.iter().map(|x| self.expr(x)).collect();
-                self.node(ExprKind::Construct, "[ ]", children, span)
-            }
-            syn::Expr::Repeat(r) => {
-                let (x, n) = (self.expr(&r.expr), self.expr(&r.len));
-                self.node(ExprKind::Construct, "[x; n]", vec![x, n], span)
-            }
+            syn::Expr::Index(i) => (ExprKind::Index, "[ ]".into(), vec![&*i.expr, &*i.index]),
             syn::Expr::Reference(r) => {
-                let c = self.expr(&r.expr);
                 let text = if r.mutability.is_some() { "&mut" } else { "&" };
-                self.node(ExprKind::Ref, text, vec![c], span)
+                (ExprKind::Ref, text.into(), vec![&*r.expr])
             }
             syn::Expr::Cast(c) => {
-                let ty = self.text(c.ty.span());
-                let x = self.expr(&c.expr);
-                self.node(ExprKind::Cast, format!("as {ty}"), vec![x], span)
+                let text = format!("as {}", self.text(c.ty.span()));
+                (ExprKind::Cast, text, vec![&*c.expr])
             }
-            syn::Expr::Try(t) => {
-                let c = self.expr(&t.expr);
-                self.node(ExprKind::Try, "?", vec![c], span)
-            }
-            syn::Expr::Await(a) => {
-                let c = self.expr(&a.base);
-                self.node(ExprKind::Await, ".await", vec![c], span)
-            }
-            syn::Expr::Range(r) => {
-                let mut children = Vec::new();
-                if let Some(s) = &r.start {
-                    children.push(self.expr(s));
-                }
-                if let Some(e) = &r.end {
-                    children.push(self.expr(e));
-                }
-                self.node(ExprKind::Operator, "..", children, span)
-            }
-            syn::Expr::Closure(_) => {
-                let t = self.text(span);
-                self.node(ExprKind::Closure, t, Vec::new(), span)
-            }
+            syn::Expr::Try(t) => (ExprKind::Try, "?".into(), vec![&*t.expr]),
+            syn::Expr::Await(a) => (ExprKind::Await, ".await".into(), vec![&*a.base]),
             syn::Expr::Return(r) => {
-                let children = r
-                    .expr
-                    .as_deref()
-                    .map(|x| vec![self.expr(x)])
-                    .unwrap_or_default();
-                self.node(ExprKind::Return, "return", children, span)
+                let operands = r.expr.as_deref().into_iter().collect();
+                (ExprKind::Return, "return".into(), operands)
             }
             syn::Expr::Break(b) => {
-                let children = b
-                    .expr
-                    .as_deref()
-                    .map(|x| vec![self.expr(x)])
-                    .unwrap_or_default();
-                self.node(ExprKind::Return, "break", children, span)
+                let operands = b.expr.as_deref().into_iter().collect();
+                (ExprKind::Return, "break".into(), operands)
             }
-            _ => {
-                let t = self.text(span);
-                self.node(ExprKind::Other, t, Vec::new(), span)
-            }
-        }
+            _ => return None,
+        };
+        Some(parts)
+    }
+
+    /// An expression shown without operands: a variable, a constant, or
+    /// anything else as text.
+    fn leaf<'e>(&self, e: &'e syn::Expr) -> Parts<'e> {
+        let (kind, text) = match e {
+            syn::Expr::Path(p) => match vars::local_name(p) {
+                Some(name) => (ExprKind::Var, name),
+                None => (ExprKind::Literal, last_two_segments(&p.path)),
+            },
+            syn::Expr::Lit(_) => (ExprKind::Literal, self.text(e.span())),
+            syn::Expr::Closure(_) => (ExprKind::Closure, self.text(e.span())),
+            _ => (ExprKind::Other, self.text(e.span())),
+        };
+        (kind, text, Vec::new())
     }
 }
 
-fn short(s: &str) -> String {
-    if s.chars().count() <= MAX_TEXT {
-        s.to_string()
-    } else {
-        s.chars().take(MAX_TEXT - 1).chain(['…']).collect()
-    }
+/// Kind, text and operands of an expression node.
+type Parts<'e> = (ExprKind, String, Vec<&'e syn::Expr>);
+
+/// A function call: named after its path; anything else that is called is
+/// the first operand.
+fn call_parts(c: &syn::ExprCall) -> Parts<'_> {
+    let (text, mut operands) = match &*c.func {
+        syn::Expr::Path(p) => (format!("{}()", last_two_segments(&p.path)), Vec::new()),
+        other => ("call".to_string(), vec![other]),
+    };
+    operands.extend(&c.args);
+    (ExprKind::Call, text, operands)
+}
+
+/// Kind, text and elements of an expression that builds a value from parts:
+/// struct literal, tuple, array.
+fn construction(e: &syn::Expr) -> Option<Parts<'_>> {
+    let (text, elements) = match e {
+        syn::Expr::Struct(st) => {
+            let name = st
+                .path
+                .segments
+                .last()
+                .map(|s| s.ident.to_string())
+                .unwrap_or_default();
+            let fields = st.fields.iter().map(|f| &f.expr).collect();
+            (format!("{name} {{}}"), fields)
+        }
+        syn::Expr::Tuple(t) => ("( )".to_string(), t.elems.iter().collect()),
+        syn::Expr::Array(a) => ("[ ]".to_string(), a.elems.iter().collect()),
+        syn::Expr::Repeat(r) => ("[x; n]".to_string(), vec![&*r.expr, &*r.len]),
+        _ => return None,
+    };
+    Some((ExprKind::Construct, text, elements))
+}
+
+/// The path shortened to its last two segments (`Vec::new`).
+fn last_two_segments(path: &syn::Path) -> String {
+    let segs = vars::segments(path);
+    segs[segs.len().saturating_sub(2)..].join("::")
 }

@@ -21,6 +21,7 @@ current and fast.
 | Who calls `f` / what does `f` call | `callers` / `callees` with `function` |
 | On which thread does `f` run | `threads_of` with `function` |
 | Shape of a long function before reading it | `outline` with `function` (add `statements: true` for every statement) |
+| What should be refactored / did my change make the structure worse | `maintainability` (score; functions, files and module cycles over their limits, worst first) |
 
 Function names can be given as full path or any `::`-suffix (`ethercat_task`,
 `App::update`). An ambiguous name returns the candidates — repeat with a
@@ -38,5 +39,9 @@ longer path.
   is handled.
 - `?` / `not followed` marks a value the analysis lost track of; search for
   it in the code if it matters.
+- `maintainability` before and after a larger change: a function that newly
+  appears under "Over a limit" (longer than 120 lines, complexity over 30,
+  nesting over 6, more than 7 parameters) should be split before finishing;
+  split by purpose, not by line count.
 - After changing threads, channels or shared state, call `threads` again and
   compare with the state before, to catch unintended structural changes.

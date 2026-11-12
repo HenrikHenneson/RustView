@@ -1,14 +1,19 @@
 //! Read-only source panel with highlighting, line numbers and jump targets.
 
+use std::ops::Range;
 use std::sync::Arc;
 
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Color32, FontId, Sense};
 use rv_ir::{FileId, Project, Span};
 
-use crate::highlight::Highlighter;
+use crate::highlight::{Highlighter, LineStyles};
 
 const TAB: &str = "    ";
+/// Font size of the code.
+const FONT_SIZE: f32 = 13.0;
+/// Width of the bar at the left of the lines of the region.
+const REGION_BAR: f32 = 3.0;
 
 #[derive(Default)]
 pub struct CodeView {
@@ -105,6 +110,63 @@ impl CodeView {
             return CodeAction::None;
         };
         let file = project.file(file_id);
+        self.header(ui, project, file);
+        ui.separator();
+
+        let styles = highlighter.get(&file.text, ui.visuals().dark_mode);
+        let text: Arc<str> = file.text.clone();
+        let line_count = file.lines.line_count();
+        let look = Look::new(ui, line_count, self.max_cols);
+
+        let mut scroll = egui::ScrollArea::both()
+            .id_salt("code_scroll")
+            .auto_shrink(false);
+        if let Some(line) = self.scroll_to.take() {
+            let spacing = ui.spacing().item_spacing.y;
+            let target = (line.saturating_sub(4)) as f32 * (look.row_height + spacing);
+            scroll = scroll.vertical_scroll_offset(target);
+        }
+
+        let mut action = CodeAction::None;
+        scroll.show_rows(ui, look.row_height, line_count, |ui, rows| {
+            ui.set_min_width(look.content_width.max(ui.available_width()));
+            for i in rows {
+                let line_no = i as u32 + 1;
+                let byte_range = file.lines.line_range(&text, line_no);
+                let width = ui.available_width().max(look.content_width);
+                let (rect, resp) =
+                    ui.allocate_exact_size(egui::vec2(width, look.row_height), Sense::click());
+                if !ui.is_rect_visible(rect) {
+                    continue;
+                }
+                let line = Line {
+                    number: line_no,
+                    text: &text[byte_range.clone()],
+                    styles: styles.as_ref().and_then(|s| s.lines.get(i)),
+                    mark: self.mark_in(file_id, &byte_range),
+                };
+                self.paint_line(ui, rect, &line, &look);
+
+                if resp.clicked() {
+                    self.cursor_line = Some(line_no);
+                    action = CodeAction::Clicked { line: line_no };
+                }
+                if resp.double_clicked() {
+                    let col = resp
+                        .interact_pointer_pos()
+                        .map_or(0, |p| look.char_col(line.text, p.x - rect.min.x));
+                    action = CodeAction::OpenInEditor {
+                        line: line_no,
+                        col: col as u32,
+                    };
+                }
+            }
+        });
+        action
+    }
+
+    /// Path of the file, the shown line range and a parse error, if any.
+    fn header(&self, ui: &mut egui::Ui, project: &Project, file: &rv_ir::SourceFile) {
         let shown_path = file
             .path
             .strip_prefix(&project.root)
@@ -120,126 +182,130 @@ impl CodeView {
         if let Some(err) = &file.parse_error {
             ui.colored_label(ui.visuals().error_fg_color, format!("parse error: {err}"));
         }
-        ui.separator();
+    }
 
-        let dark = ui.visuals().dark_mode;
-        let styles = highlighter.get(&file.text, dark);
-        let text: Arc<str> = file.text.clone();
-        let line_count = file.lines.line_count();
+    /// The part of the mark that lies in the line at `line_bytes` of file
+    /// `file`, as bytes from the line start.
+    fn mark_in(&self, file: FileId, line_bytes: &Range<usize>) -> Option<Range<usize>> {
+        self.mark
+            .as_ref()
+            .filter(|m| m.file == file)
+            .map(|m| {
+                let start = (m.bytes.start as usize).saturating_sub(line_bytes.start);
+                let end = (m.bytes.end as usize).saturating_sub(line_bytes.start);
+                start..end
+            })
+            .filter(|r| r.end > 0 && r.start < line_bytes.len().max(1))
+    }
 
-        let font = FontId::monospace(13.0);
+    /// Paints one line in `rect`: background of cursor and region, line
+    /// number and the highlighted text.
+    fn paint_line(&self, ui: &egui::Ui, rect: egui::Rect, line: &Line, look: &Look) {
+        let painter = ui.painter();
+        let in_region = self
+            .region
+            .as_ref()
+            .is_some_and(|r| (r.start.line..=r.end.line).contains(&line.number));
+        if self.cursor_line == Some(line.number) {
+            painter.rect_filled(rect, 0.0, look.cursor_bg);
+        } else if in_region {
+            painter.rect_filled(rect, 0.0, look.region_bg);
+        }
+        if in_region {
+            let bar = egui::Rect::from_min_size(rect.min, egui::vec2(REGION_BAR, rect.height()));
+            painter.rect_filled(bar, 0.0, look.region_bar);
+        }
+
+        painter.text(
+            rect.min + egui::vec2(look.gutter - look.char_width, 0.0),
+            egui::Align2::RIGHT_TOP,
+            line.number.to_string(),
+            look.font.clone(),
+            look.line_number,
+        );
+
+        let job = line_job(line, look);
+        let galley = ui.fonts_mut(|f| f.layout_job(job));
+        painter.galley(
+            rect.min + egui::vec2(look.gutter, 0.0),
+            galley,
+            look.text_color,
+        );
+    }
+}
+
+/// One line of the shown file.
+struct Line<'a> {
+    /// 1-based.
+    number: u32,
+    text: &'a str,
+    /// `None` while the highlighter is working.
+    styles: Option<&'a LineStyles>,
+    /// Marked bytes of the line.
+    mark: Option<Range<usize>>,
+}
+
+/// Font, sizes and colors of the code panel in this frame.
+struct Look {
+    font: FontId,
+    row_height: f32,
+    char_width: f32,
+    /// Width of the line number column.
+    gutter: f32,
+    /// Width of the gutter and the longest line.
+    content_width: f32,
+    text_color: Color32,
+    line_number: Color32,
+    region_bg: Color32,
+    region_bar: Color32,
+    mark_bg: Color32,
+    cursor_bg: Color32,
+}
+
+impl Look {
+    fn new(ui: &egui::Ui, line_count: usize, max_cols: usize) -> Self {
+        let font = FontId::monospace(FONT_SIZE);
         let row_height = ui.fonts_mut(|f| f.row_height(&font));
         let char_width = ui.fonts_mut(|f| f.glyph_width(&font, 'x'));
         let gutter_chars = line_count.to_string().len() + 2;
         let gutter = gutter_chars as f32 * char_width;
-        let content_width = gutter + (self.max_cols + 2) as f32 * char_width;
-
-        let visuals = ui.visuals().clone();
-        let default_color = visuals.text_color();
-        let region_bg = visuals.selection.bg_fill.gamma_multiply(0.25);
-        let mark_bg = visuals.selection.bg_fill.gamma_multiply(0.7);
-        let cursor_bg = visuals.faint_bg_color;
-
-        let mut scroll = egui::ScrollArea::both()
-            .id_salt("code_scroll")
-            .auto_shrink(false);
-        if let Some(line) = self.scroll_to.take() {
-            let spacing = ui.spacing().item_spacing.y;
-            let target = (line.saturating_sub(4)) as f32 * (row_height + spacing);
-            scroll = scroll.vertical_scroll_offset(target);
+        let visuals = ui.visuals();
+        Look {
+            font,
+            row_height,
+            char_width,
+            gutter,
+            content_width: gutter + (max_cols + 2) as f32 * char_width,
+            text_color: visuals.text_color(),
+            line_number: visuals.weak_text_color(),
+            region_bg: visuals.selection.bg_fill.gamma_multiply(0.25),
+            region_bar: visuals.selection.stroke.color,
+            mark_bg: visuals.selection.bg_fill.gamma_multiply(0.7),
+            cursor_bg: visuals.faint_bg_color,
         }
+    }
 
-        let mut action = CodeAction::None;
-        scroll.show_rows(ui, row_height, line_count, |ui, rows| {
-            ui.set_min_width(content_width.max(ui.available_width()));
-            for i in rows {
-                let line_no = i as u32 + 1;
-                let byte_range = file.lines.line_range(&text, line_no);
-                let line_text = &text[byte_range.clone()];
-                let width = ui.available_width().max(content_width);
-                let (rect, resp) =
-                    ui.allocate_exact_size(egui::vec2(width, row_height), Sense::click());
-                if !ui.is_rect_visible(rect) {
-                    continue;
-                }
-                let painter = ui.painter();
-
-                let in_region = self
-                    .region
-                    .as_ref()
-                    .is_some_and(|r| (r.start.line..=r.end.line).contains(&line_no));
-                if self.cursor_line == Some(line_no) {
-                    painter.rect_filled(rect, 0.0, cursor_bg);
-                } else if in_region {
-                    painter.rect_filled(rect, 0.0, region_bg);
-                }
-                if in_region {
-                    let bar = egui::Rect::from_min_size(rect.min, egui::vec2(3.0, rect.height()));
-                    painter.rect_filled(bar, 0.0, visuals.selection.stroke.color);
-                }
-
-                painter.text(
-                    rect.min + egui::vec2(gutter - char_width, 0.0),
-                    egui::Align2::RIGHT_TOP,
-                    line_no.to_string(),
-                    font.clone(),
-                    visuals.weak_text_color(),
-                );
-
-                let mark = self
-                    .mark
-                    .as_ref()
-                    .filter(|m| m.file == file_id)
-                    .map(|m| {
-                        let start = (m.bytes.start as usize).saturating_sub(byte_range.start);
-                        let end = (m.bytes.end as usize).saturating_sub(byte_range.start);
-                        start..end
-                    })
-                    .filter(|r| r.end > 0 && r.start < line_text.len().max(1));
-                let line_styles = styles.as_ref().and_then(|s| s.lines.get(i));
-                let job = line_job(line_text, line_styles, &font, default_color, mark, mark_bg);
-                let galley = ui.fonts_mut(|f| f.layout_job(job));
-                painter.galley(rect.min + egui::vec2(gutter, 0.0), galley, default_color);
-
-                if resp.clicked() {
-                    self.cursor_line = Some(line_no);
-                    action = CodeAction::Clicked { line: line_no };
-                }
-                if resp.double_clicked() {
-                    let col = resp
-                        .interact_pointer_pos()
-                        .map(|p| ((p.x - rect.min.x - gutter) / char_width).max(0.0) as usize)
-                        .map_or(0, |visual| visual_to_char_col(line_text, visual));
-                    action = CodeAction::OpenInEditor {
-                        line: line_no,
-                        col: col as u32,
-                    };
-                }
-            }
-        });
-        action
+    /// Char column of `line` at `x` (from the left edge of the row).
+    fn char_col(&self, line: &str, x: f32) -> usize {
+        let visual = ((x - self.gutter) / self.char_width).max(0.0) as usize;
+        visual_to_char_col(line, visual)
     }
 }
 
-fn line_job(
-    line: &str,
-    styles: Option<&crate::highlight::LineStyles>,
-    font: &FontId,
-    default_color: Color32,
-    mark: Option<std::ops::Range<usize>>,
-    mark_bg: Color32,
-) -> LayoutJob {
+/// The text of a line with its highlighting and the mark as background.
+fn line_job(line: &Line, look: &Look) -> LayoutJob {
+    let text = line.text;
     let mut job = LayoutJob::default();
     let mut push = |piece: &str, color: Color32, italic: bool, marked: bool| {
         if piece.is_empty() {
             return;
         }
         let format = TextFormat {
-            font_id: font.clone(),
+            font_id: look.font.clone(),
             color,
             italics: italic,
             background: if marked {
-                mark_bg
+                look.mark_bg
             } else {
                 Color32::TRANSPARENT
             },
@@ -248,15 +314,15 @@ fn line_job(
         job.append(&piece.replace('\t', TAB), 0.0, format);
     };
     // Split every styled piece at the mark boundaries.
-    let pieces: Vec<(std::ops::Range<usize>, Color32, bool)> = match styles {
+    let pieces: Vec<(Range<usize>, Color32, bool)> = match line.styles {
         Some(s) if !s.is_empty() => s
             .iter()
-            .map(|(r, c, i)| (r.start.min(line.len())..r.end.min(line.len()), *c, *i))
+            .map(|(r, c, i)| (r.start.min(text.len())..r.end.min(text.len()), *c, *i))
             .collect(),
-        _ => vec![(0..line.len(), default_color, false)],
+        _ => vec![(0..text.len(), look.text_color, false)],
     };
     for (range, color, italic) in pieces {
-        match &mark {
+        match &line.mark {
             Some(m) => {
                 let cuts = [
                     range.start,
@@ -266,10 +332,10 @@ fn line_job(
                 ];
                 for w in cuts.windows(2) {
                     let marked = w[0] >= m.start && w[1] <= m.end && w[0] < w[1];
-                    push(line.get(w[0]..w[1]).unwrap_or(""), color, italic, marked);
+                    push(text.get(w[0]..w[1]).unwrap_or(""), color, italic, marked);
                 }
             }
-            None => push(line.get(range).unwrap_or(""), color, italic, false),
+            None => push(text.get(range).unwrap_or(""), color, italic, false),
         }
     }
     job

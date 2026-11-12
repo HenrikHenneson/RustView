@@ -64,8 +64,11 @@ Platform notes:
   `libwayland-dev` and the `libxcb-*` development packages.
 - **macOS:** the binaries are not signed; on first start use right click →
   *Open* (or `xattr -d com.apple.quarantine rustview`).
-- `cargo` must be on the `PATH` (RustView runs `cargo metadata` to find the
-  packages of a workspace). The default editor command is VS Code's `code`.
+- RustView runs `cargo metadata` to find the packages of a workspace. Without
+  a Rust installation (no `cargo` on the `PATH` or in `~/.cargo/bin`) it reads
+  the `Cargo.toml` files itself, by Cargo's conventions for libraries,
+  binaries and workspace members. The default editor command is VS Code's
+  `code`.
 
 ## Usage
 
@@ -85,6 +88,10 @@ by dropping a folder or `.rs` file onto the window.
   button (the whole diagram, light colors).
 - `--report [FILE]` writes a compact Markdown report of the project (see
   below) to FILE or stdout without opening a window.
+- `--maintainability [FILE]` writes the [maintainability](#maintainability)
+  findings of the project as Markdown; with `--gate` the exit status is 1 if
+  anything is over a limit.
+- `--tab report` or `--tab maintainability` starts with that tab.
 - `--select ec_task::ethercat_task` selects a function after loading
   (full qualified path or any `::`-suffix of it).
 - `--editor` defaults to `code --goto {file}:{line}:{col}`.
@@ -174,10 +181,46 @@ Before larger changes run `rustview . --report target/rustview-report.md`
 and read it for the thread model and how the threads communicate.
 ```
 
-The same report is the *Report* tab of the GUI: formatted, with every
+The same report is the *Report* tab of the GUI (`--tab report`): formatted, with every
 `file:line` and function name as a link to the code and the diagram, and
 *Save…* / *Copy* buttons. On MultiTribDev (89k lines, 16 threads) it is about
 25 KB and is generated in a few seconds.
+
+## Maintainability
+
+`rustview <project> --maintainability [FILE]` measures how much of a project
+stays within limits that keep code readable and changeable, and lists what
+does not — worst first, each with `file:line`. The same text is the
+*Maintainability* tab of the GUI, with links to the code and the diagrams
+(here RustView on its own source):
+
+![Maintainability tab: score, limits and findings](docs/screenshots/maintainability.png)
+
+| measure | target | limit |
+|---|---|---|
+| function length (lines of the body) | 60 | 120 |
+| function complexity | 15 | 30 |
+| nesting depth (loops, branches, closures, blocks inside each other) | 4 | 6 |
+| parameters (without `self`) | 5 | 7 |
+| file length (lines) | 500 | 1000 |
+| modules that call each other in a cycle | 0 | 0 |
+
+*Complexity* counts every loop, `if`, `match` and `let … else` as 1 plus its
+nesting level, and every further `else if` / `else` as 1 (in the spirit of
+"cognitive complexity"): a flat sequence of statements is 0 however long it
+is, the same branches cost more the deeper they are nested. For module
+cycles the report names the link with the fewest call sites — usually the
+cheapest one to remove.
+
+The score (0–100, grades A–E) is the share of code within the targets: code
+between target and limit counts half, code over a limit not at all; code is
+weighed by its lines, so one huge function counts as much as the small ones
+it could be split into. Functions weigh 60 %, files 20 %, modules outside of
+call cycles 20 %.
+
+`--gate` makes it a check for CI: exit status 1 if a function or file is over
+a limit or modules form a cycle. RustView checks itself this way in its own
+CI. Like everything else the measure is syntactic; test code is not included.
 
 ## MCP server and Claude Code plugin
 
@@ -193,6 +236,7 @@ and answers single questions in milliseconds:
 | `callers` / `callees` | who calls a function / what it calls, with the call lines |
 | `threads_of` | which threads run a function |
 | `outline` | the nesting of a function with line ranges, thread starts and exits — a 2500-line function in about 3k tokens |
+| `maintainability` | score and the functions, files and module cycles over their targets (see above) |
 
 **Claude Code plugin** (MCP server plus a skill that tells Claude when to use
 it; needs `rustview` on the `PATH`, see [Install](#install)):
@@ -223,7 +267,7 @@ to fix it to one project.
 |------------|------|
 | `rv-ir`    | backend-independent model (project, modules, functions, spans) |
 | `rv-syn`   | frontend: `cargo metadata` + `syn` → `rv-ir` |
-| `rv-analysis` | data flow (name resolution, def-use, mutation edges), concurrency (lanes, channels, shared state), program model, report and queries |
+| `rv-analysis` | data flow (name resolution, def-use, mutation edges), concurrency (lanes, channels, shared state), program model, report, maintainability and queries |
 | `rv-layout`| diagram geometry (nested frames, both orientations), no GUI dependency |
 | `rv-gui`   | egui application |
 | `rv-mcp`   | MCP server (`rustview mcp`) |

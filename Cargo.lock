@@ -3605,19 +3605,21 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "rustview"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
  "env_logger",
+ "rv-analysis",
  "rv-gui",
  "rv-mcp",
+ "rv-syn",
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "rv-analysis"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "rv-ir",
  "rv-syn",
@@ -3625,7 +3627,7 @@ dependencies = [
 
 [[package]]
 name = "rv-gui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "eframe",
@@ -3644,11 +3646,11 @@ dependencies = [
 
 [[package]]
 name = "rv-ir"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "rv-layout"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "emath",
  "rv-ir",
@@ -3657,7 +3659,7 @@ dependencies = [
 
 [[package]]
 name = "rv-mcp"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "log",
@@ -3671,7 +3673,7 @@ dependencies = [
 
 [[package]]
 name = "rv-syn"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "cargo_metadata",
@@ -3680,6 +3682,7 @@ dependencies = [
  "rv-analysis",
  "rv-ir",
  "syn 3.0.9",
+ "toml",
  "walkdir",
 ]
 
@@ -3828,6 +3831,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "serde_spanned"
+version = "1.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c187e0a369471c550af028cba56d4f4fa2a489ad28151ae95a4d340a2a8b782"
+dependencies = [
+ "serde_core",
 ]
 
 [[package]]
@@ -4308,10 +4320,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "toml_datetime"
-version = "1.1.2+spec-1.1.0"
+name = "toml"
+version = "1.2.1+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b86d767906c6c42421dcba507eb9d203e779497710a47782a224bb871653053"
+checksum = "d5755c51863cdac711f1956baf8eb9588e060755f7d3c4c979e70ea1e1f32cd7"
+dependencies = [
+ "indexmap",
+ "serde_core",
+ "serde_spanned",
+ "toml_datetime",
+ "toml_parser",
+ "toml_writer",
+ "winnow",
+]
+
+[[package]]
+name = "toml_datetime"
+version = "1.1.3+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "173f25c883cd2176a2d8212155638c0a60d484a9d84546d270866f40f56b6e49"
 dependencies = [
  "serde_core",
 ]
@@ -4336,6 +4363,12 @@ checksum = "baa693a8032d7e1cada7d0041e96126df243179ff061456783ac7f12bda4744c"
 dependencies = [
  "winnow",
 ]
+
+[[package]]
+name = "toml_writer"
+version = "1.2.0+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "009dbb7700f11c55ef83aebbe4c0e9cf1f1ac0844bd8d6f00dc38f302026e13a"
 
 [[package]]
 name = "tracing"
