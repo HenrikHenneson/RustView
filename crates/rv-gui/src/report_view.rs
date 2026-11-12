@@ -136,72 +136,72 @@ impl ReportView {
 
 fn draw_block(ui: &mut Ui, block: &Block) -> Option<ReportAction> {
     let mut action = None;
-    let mut segs = |ui: &mut Ui, size: Option<f32>, strong: bool| {
-        for seg in &block.segs {
-            let sized = |t: RichText| match size {
-                Some(s) => t.size(s),
-                None => t,
-            };
-            match seg {
-                Seg::Text(t) => {
-                    let t = sized(RichText::new(t));
-                    ui.label(if strong { t.strong() } else { t });
-                }
-                Seg::Bold(t) => {
-                    ui.label(sized(RichText::new(t).strong()));
-                }
-                Seg::Code(t, None) => {
-                    ui.label(sized(RichText::new(t).code()));
-                }
-                Seg::Code(t, Some(f)) => {
-                    if ui
-                        .link(sized(RichText::new(t).code()))
-                        .on_hover_text("show the function")
-                        .clicked()
-                    {
-                        action = Some(ReportAction::ShowFn(*f));
-                    }
-                }
-                Seg::Loc(t, file, line) => {
-                    if ui
-                        .link(t.as_str())
-                        .on_hover_text("show in the code")
-                        .clicked()
-                    {
-                        action = Some(ReportAction::Goto(*file, *line));
-                    }
-                }
-            }
-        }
-    };
+    let segs = &block.segs;
     match block.kind {
         BlockKind::Gap => {
             ui.add_space(6.0);
         }
         BlockKind::Title => {
-            ui.horizontal_wrapped(|ui| segs(ui, Some(22.0), true));
+            ui.horizontal_wrapped(|ui| action = draw_segs(ui, segs, Some(22.0), true));
         }
         BlockKind::Heading => {
             ui.add_space(6.0);
-            ui.horizontal_wrapped(|ui| segs(ui, Some(18.0), true));
+            ui.horizontal_wrapped(|ui| action = draw_segs(ui, segs, Some(18.0), true));
             ui.separator();
         }
         BlockKind::Subheading => {
-            ui.horizontal_wrapped(|ui| segs(ui, Some(15.0), true));
+            ui.horizontal_wrapped(|ui| action = draw_segs(ui, segs, Some(15.0), true));
         }
         BlockKind::Item(level) => {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 ui.add_space(8.0 + 18.0 * level as f32);
                 ui.label(if level == 0 { "•  " } else { "◦  " });
-                segs(ui, None, false);
+                action = draw_segs(ui, segs, None, false);
             });
         }
         BlockKind::Paragraph => {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
-                segs(ui, None, false);
+                action = draw_segs(ui, segs, None, false);
             });
+        }
+    }
+    action
+}
+
+/// The segments of a block in a row; `size` and `strong` are those of
+/// headings. Returns what a clicked link asks for.
+fn draw_segs(ui: &mut Ui, segs: &[Seg], size: Option<f32>, strong: bool) -> Option<ReportAction> {
+    let mut action = None;
+    let sized = |t: RichText| match size {
+        Some(s) => t.size(s),
+        None => t,
+    };
+    for seg in segs {
+        match seg {
+            Seg::Text(t) => {
+                let t = sized(RichText::new(t));
+                ui.label(if strong { t.strong() } else { t });
+            }
+            Seg::Bold(t) => {
+                ui.label(sized(RichText::new(t).strong()));
+            }
+            Seg::Code(t, None) => {
+                ui.label(sized(RichText::new(t).code()));
+            }
+            Seg::Code(t, Some(f)) => {
+                let link = ui.link(sized(RichText::new(t).code()));
+                if link.on_hover_text("show the function").clicked() {
+                    action = Some(ReportAction::ShowFn(*f));
+                }
+            }
+            Seg::Loc(t, file, line) => {
+                let link = ui.link(t.as_str());
+                if link.on_hover_text("show in the code").clicked() {
+                    action = Some(ReportAction::Goto(*file, *line));
+                }
+            }
         }
     }
     action

@@ -4,9 +4,14 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use rv_analysis::{CallGraph, Facts};
-use rv_ir::{FnId, Project};
 
+use crate::callgraph_view::{ModuleLayout, module_svg};
+use crate::comm_view::Matrix;
 use crate::export;
+use crate::lookup::find_function;
+
+/// Module depth of the exported module graphs (the default of the window).
+const MODULE_DEPTH: usize = 2;
 
 /// Writes SVG and PNG files of the thread graph and communication matrix of
 /// every binary, the module graph of every crate and, with `select`, the
@@ -35,12 +40,12 @@ pub fn export_all(path: &Path, dir: &Path, select: Option<&str>) -> Result<Vec<P
         let layout = crate::program_view::layout(&project, &program);
         write(
             &format!("{qual}_threads"),
-            &crate::program_view::svg(&project, &program, &layout),
+            &crate::program_view::graph_svg(&layout),
         )?;
         if !(program.channels.is_empty() && program.shared.is_empty() && program.joins.is_empty()) {
             write(
                 &format!("{qual}_communication"),
-                &crate::comm_view::svg(&program),
+                &crate::comm_view::matrix_svg(&program, &Matrix::new(&program)),
             )?;
         }
     }
@@ -48,12 +53,8 @@ pub fn export_all(path: &Path, dir: &Path, select: Option<&str>) -> Result<Vec<P
         if crate_name.starts_with("build_script") {
             continue;
         }
-        let (g, l, sizes) =
-            crate::callgraph_view::module_layout(&project, &calls, &facts, &crate_name, 2);
-        write(
-            &format!("{crate_name}_modules"),
-            &crate::callgraph_view::module_svg(&crate_name, &g, &l, &sizes),
-        )?;
+        let layout = ModuleLayout::new(&project, &calls, &facts, &crate_name, MODULE_DEPTH);
+        write(&format!("{crate_name}_modules"), &module_svg(&layout))?;
     }
     if let Some(wanted) = select {
         let f = find_function(&project, wanted)
@@ -62,16 +63,4 @@ pub fn export_all(path: &Path, dir: &Path, select: Option<&str>) -> Result<Vec<P
         write(&project.function(f).qual_path, &svg)?;
     }
     Ok(written)
-}
-
-/// Exact qualified path, or the shortest one ending in `::wanted`.
-fn find_function(project: &Project, wanted: &str) -> Option<FnId> {
-    let suffix = format!("::{wanted}");
-    project
-        .functions
-        .iter()
-        .enumerate()
-        .filter(|(_, f)| f.qual_path == wanted || f.qual_path.ends_with(&suffix))
-        .min_by_key(|(_, f)| f.qual_path.len())
-        .map(|(i, _)| FnId(i as u32))
 }
