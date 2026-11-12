@@ -5,13 +5,15 @@
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
-use rv_ir::{FnId, FrameRole, NodeId, NodeKind, Project, StructKind};
+use rv_ir::{FnId, NodeId, Project};
 
 use crate::locate::{Loc, short};
-use crate::{CallGraph, Facts, Program};
+use crate::{CallGraph, Program};
 
-/// Lines of an outline before it is cut.
-const MAX_OUTLINE: usize = 400;
+mod outline;
+
+pub use outline::outline;
+
 /// Entries of a list answer before it is cut.
 const MAX_ENTRIES: usize = 40;
 
@@ -60,8 +62,26 @@ pub fn find(project: &Project, programs: &[(FnId, Program)], name: &str) -> Stri
     let loc = Loc::new(project);
     let mut out = String::new();
     let last = name.rsplit("::").next().unwrap_or(name);
-    let suffix = format!("::{name}");
+    find_functions(&mut out, &loc, name, last);
+    find_type(&mut out, &loc, last);
+    for (entry, program) in programs {
+        let bin = &project.function(*entry).qual_path;
+        find_in_program(&mut out, &loc, program, bin, name);
+    }
+    if out.is_empty() {
+        format!(
+            "Nothing named `{name}` (functions, types, threads, channels, shared state). \
+             Local variables that are not channels or shared state are not indexed."
+        )
+    } else {
+        out
+    }
+}
 
+/// Functions called `name` (`last` is its last path segment).
+fn find_functions(out: &mut String, loc: &Loc, name: &str, last: &str) {
+    let project = loc.project;
+    let suffix = format!("::{name}");
     let fns: Vec<FnId> = project
         .functions
         .iter()
@@ -75,92 +95,79 @@ pub fn find(project: &Project, programs: &[(FnId, Program)], name: &str) -> Stri
             let func = project.function(f);
             let _ = writeln!(out, "- {}: `{}`", loc.func(f), func.sig.text);
         }
-        more(&mut out, fns.len());
+        more(out, fns.len());
     }
+}
 
-    // Methods of a type of that name.
+/// The type called `name`: its fields, its methods and what it is an alias of.
+fn find_type(out: &mut String, loc: &Loc, name: &str) {
+    let project = loc.project;
     let methods: Vec<FnId> = project
         .functions
         .iter()
         .enumerate()
         .filter(|(_, f)| match &f.owner {
             rv_ir::FnOwner::Impl { self_ty, .. } => {
-                self_ty.split('<').next().unwrap_or(self_ty).trim() == last
+                self_ty.split('<').next().unwrap_or(self_ty).trim() == name
             }
             _ => false,
         })
         .map(|(i, _)| FnId(i as u32))
         .collect();
-    if let Some(fields) = project.struct_fields.get(last) {
+    if let Some(fields) = project.struct_fields.get(name) {
         let list: Vec<String> = fields.iter().map(|(f, t)| format!("{f}: {t}")).collect();
-        let _ = writeln!(out, "Struct `{last}` fields: {}", list.join(", "));
+        let _ = writeln!(out, "Struct `{name}` fields: {}", list.join(", "));
     }
     if !methods.is_empty() {
-        let _ = writeln!(out, "Methods of `{last}`:");
+        let _ = writeln!(out, "Methods of `{name}`:");
         for &f in methods.iter().take(MAX_ENTRIES) {
             let _ = writeln!(out, "- {}", loc.func(f));
         }
-        more(&mut out, methods.len());
+        more(out, methods.len());
     }
-    if let Some(target) = project.type_aliases.get(last) {
-        let _ = writeln!(out, "Type alias `{last}` = `{target}`");
+    if let Some(target) = project.type_aliases.get(name) {
+        let _ = writeln!(out, "Type alias `{name}` = `{target}`");
     }
+}
 
-    for (entry, program) in programs {
-        let bin = &project.function(*entry).qual_path;
-        for (i, t) in program.threads.iter().enumerate() {
-            if t.name.as_deref() == Some(name) {
-                let at = t.site.map(|(f, n)| node_at(&loc, f, n)).unwrap_or_default();
-                let _ = writeln!(out, "Thread #{i} '{name}' of `{bin}`, started at {at}");
-            }
-        }
-        for c in &program.channels {
-            if c.name.split(" → ").any(|end| end == name) {
-                let _ = writeln!(
-                    out,
-                    "Channel `{}` (`{}`) of `{bin}`, created at {}; senders: {}; receivers: {}",
-                    c.name,
-                    c.api,
-                    node_at(&loc, c.site.0, c.site.1),
-                    thread_list(&c.senders),
-                    thread_list(&c.receivers)
-                );
-            }
-        }
-        for s in &program.shared {
-            if s.name == name || s.kind.contains(name) {
-                let _ = writeln!(
-                    out,
-                    "Shared state `{}` (`{}`) of `{bin}`, created at {}; used by threads {}",
-                    s.name,
-                    s.kind,
-                    node_at(&loc, s.site.0, s.site.1),
-                    thread_list(&s.users)
-                );
-            }
+/// Threads, channels and shared state called `name` in the binary `bin`.
+fn find_in_program(out: &mut String, loc: &Loc, program: &Program, bin: &str, name: &str) {
+    for (i, t) in program.threads.iter().enumerate() {
+        if t.name.as_deref() == Some(name) {
+            let at = t.site.map(|(f, n)| loc.node(f, n)).unwrap_or_default();
+            let _ = writeln!(out, "Thread #{i} '{name}' of `{bin}`, started at {at}");
         }
     }
-    if out.is_empty() {
-        format!(
-            "Nothing named `{name}` (functions, types, threads, channels, shared state). \
-             Local variables that are not channels or shared state are not indexed."
-        )
-    } else {
-        out
+    for c in &program.channels {
+        if c.name.split(" → ").any(|end| end == name) {
+            let _ = writeln!(
+                out,
+                "Channel `{}` (`{}`) of `{bin}`, created at {}; senders: {}; receivers: {}",
+                c.name,
+                c.api,
+                loc.node(c.site.0, c.site.1),
+                thread_list(&c.senders),
+                thread_list(&c.receivers)
+            );
+        }
+    }
+    for s in &program.shared {
+        if s.name == name || s.kind.contains(name) {
+            let _ = writeln!(
+                out,
+                "Shared state `{}` (`{}`) of `{bin}`, created at {}; used by threads {}",
+                s.name,
+                s.kind,
+                loc.node(s.site.0, s.site.1),
+                thread_list(&s.users)
+            );
+        }
     }
 }
 
 fn more(out: &mut String, total: usize) {
     if total > MAX_ENTRIES {
         let _ = writeln!(out, "- … {} more", total - MAX_ENTRIES);
-    }
-}
-
-fn node_at(loc: &Loc, f: FnId, node: NodeId) -> String {
-    let func = loc.project.function(f);
-    match &func.body {
-        Some(b) if node.index() < b.nodes.len() => loc.at(&b.node(node).span),
-        _ => loc.at(&func.name_span),
     }
 }
 
@@ -268,192 +275,6 @@ pub fn threads_of(project: &Project, programs: &[(FnId, Program)], f: FnId) -> S
         );
     }
     out
-}
-
-/// The nesting of `f`: loops, branches, closures, thread lanes and exits,
-/// one line each with its line range. With `statements`, also the plain
-/// statements.
-pub fn outline(project: &Project, facts: &Facts, f: FnId, statements: bool) -> String {
-    let loc = Loc::new(project);
-    let func = project.function(f);
-    let Some(body) = &func.body else {
-        return format!("{} has no body.", loc.func(f));
-    };
-    let mut marks: BTreeMap<NodeId, Vec<String>> = BTreeMap::new();
-    for e in &body.exits {
-        marks
-            .entry(e.from)
-            .or_default()
-            .push(format!("→ {}", e.kind.symbol()));
-    }
-    if let Some(c) = facts.concurrency(f) {
-        for s in &c.spawns {
-            let what = match &s.name {
-                Some(n) => format!("‖ starts {} '{n}'", s.kind.label()),
-                None => format!("‖ starts {}", s.kind.label()),
-            };
-            marks.entry(s.node).or_default().push(what.clone());
-            for &lane in &s.lanes {
-                marks
-                    .entry(lane)
-                    .or_default()
-                    .push("runs concurrently".into());
-            }
-        }
-    }
-    let mut o = Outline {
-        body,
-        marks,
-        statements,
-        lines: Vec::new(),
-    };
-    o.node(body.root, 0);
-    let mut out = format!(
-        "Outline of {}: {} lines, file {}{}\n",
-        loc.func(f),
-        func.span.line_count(),
-        loc.file(&func.span),
-        if statements {
-            ""
-        } else {
-            " (structures only; statements with exits or thread starts are kept)"
-        }
-    );
-    let total = o.lines.len();
-    for l in o.lines.into_iter().take(MAX_OUTLINE) {
-        out.push_str(&l);
-        out.push('\n');
-    }
-    if total > MAX_OUTLINE {
-        let _ = writeln!(out, "… {} more lines", total - MAX_OUTLINE);
-    }
-    out
-}
-
-struct Outline<'b> {
-    body: &'b rv_ir::Body,
-    marks: BTreeMap<NodeId, Vec<String>>,
-    statements: bool,
-    lines: Vec<String>,
-}
-
-impl Outline<'_> {
-    /// The pattern of the only case frame among `children`, if there is
-    /// exactly one case and no `else`.
-    fn single_case(&self, children: &[NodeId]) -> Option<String> {
-        let mut cases = children
-            .iter()
-            .filter_map(|&c| match &self.body.node(c).kind {
-                NodeKind::Frame {
-                    role: FrameRole::Case { pattern, .. },
-                } => Some(Some(pattern.clone())),
-                NodeKind::Frame {
-                    role: FrameRole::Else,
-                } => Some(None),
-                _ => None,
-            });
-        match (cases.next(), cases.next()) {
-            (Some(Some(pattern)), None) => Some(pattern),
-            _ => None,
-        }
-    }
-
-    fn push(&mut self, depth: usize, node: NodeId, text: &str) {
-        let n = self.body.node(node);
-        let range = if n.span.end.line > n.span.start.line {
-            format!("{}-{}", n.span.start.line, n.span.end.line)
-        } else {
-            n.span.start.line.to_string()
-        };
-        let mut line = format!("{}{range} {}", "  ".repeat(depth), one_line(text));
-        if let Some(m) = self.marks.get(&node) {
-            let _ = write!(line, "  [{}]", m.join(", "));
-        }
-        self.lines.push(line);
-    }
-
-    fn node(&mut self, id: NodeId, depth: usize) {
-        let n = self.body.node(id).clone();
-        match &n.kind {
-            NodeKind::Structure { kind, .. } => {
-                let depth = if matches!(kind, StructKind::Function) {
-                    depth
-                } else {
-                    // A lone `if` shows its condition (cases are only listed
-                    // when there are several).
-                    let label = match (kind, self.single_case(&n.children)) {
-                        (StructKind::If, Some(pattern)) => format!("if {pattern}"),
-                        _ => n.label.clone(),
-                    };
-                    self.push(depth, id, &label);
-                    depth + 1
-                };
-                let cases = n
-                    .children
-                    .iter()
-                    .filter(|&&c| {
-                        matches!(
-                            self.body.node(c).kind,
-                            NodeKind::Frame {
-                                role: FrameRole::Case { .. } | FrameRole::Else
-                            }
-                        )
-                    })
-                    .count();
-                for &c in &n.children {
-                    let frame = self.body.node(c);
-                    let named = cases > 1
-                        && matches!(
-                            frame.kind,
-                            NodeKind::Frame {
-                                role: FrameRole::Case { .. } | FrameRole::Else
-                            }
-                        );
-                    if named {
-                        let label = match &frame.kind {
-                            NodeKind::Frame {
-                                role: FrameRole::Case { pattern, guard },
-                            } => match guard {
-                                Some(g) => format!("{pattern} if {g} =>"),
-                                None => format!("{pattern} =>"),
-                            },
-                            _ => "else =>".into(),
-                        };
-                        self.push(depth, c, &label);
-                        self.node(c, depth + 1);
-                    } else {
-                        self.node(c, depth);
-                    }
-                }
-            }
-            NodeKind::Frame { .. } => {
-                for &c in &n.children {
-                    self.node(c, depth);
-                }
-            }
-            NodeKind::Stmt { .. } => {
-                let marked = self.marks.contains_key(&id);
-                let shown = self.statements || marked;
-                if shown {
-                    self.push(depth, id, &n.label);
-                }
-                let inner = if shown { depth + 1 } else { depth };
-                for &c in &n.children {
-                    self.node(c, inner);
-                }
-            }
-        }
-    }
-}
-
-/// The first line of a label, at most 100 chars.
-fn one_line(text: &str) -> String {
-    let first = text.lines().next().unwrap_or("").trim();
-    if first.chars().count() > 100 {
-        format!("{}…", first.chars().take(99).collect::<String>())
-    } else {
-        first.to_string()
-    }
 }
 
 /// Short name used in answers (`Type::method`).
