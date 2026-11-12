@@ -1,6 +1,7 @@
 name: Release
 
-# Push a tag like `v0.1.0` to build the binaries and attach them to a GitHub release.
+# Push a tag like `v0.1.0` to build the binaries and attach them to a draft
+# GitHub release; publish the draft once the binaries are checked.
 on:
   push:
     tags: ["v*"]
@@ -62,3 +63,5 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: ${{ env.ASSET }}
+          draft: true
+          generate_release_notes: true
