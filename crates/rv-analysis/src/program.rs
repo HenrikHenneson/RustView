@@ -13,7 +13,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
-use rv_ir::{Body, CallKind, CallSite, FnId, FnOwner, NodeId, Project, TargetKind};
+use rv_ir::{Body, CallKind, CallSite, FnId, FnOwner, NodeId, Package, Project, TargetKind};
 
 use crate::{Concurrency, DataFlow, SpawnKind};
 
@@ -112,9 +112,11 @@ impl CallGraph {
 struct Resolver<'p> {
     project: &'p Project,
     by_name: HashMap<&'p str, Vec<FnId>>,
-    /// Crate names of library targets: callable from every crate. Other
+    /// Crate names of library targets: callable from other crates. Other
     /// crates (binaries) only call into themselves.
     libs: HashSet<String>,
+    /// Crate name of a target -> its package.
+    package_of: HashMap<String, &'p Package>,
 }
 
 impl<'p> Resolver<'p> {
@@ -133,17 +135,34 @@ impl<'p> Resolver<'p> {
             .filter(|t| t.kind == TargetKind::Lib)
             .map(|t| t.name.replace('-', "_"))
             .collect();
+        let package_of = project
+            .packages
+            .iter()
+            .flat_map(|p| p.targets.iter().map(move |t| (t.name.replace('-', "_"), p)))
+            .collect();
         Resolver {
             project,
             by_name,
             libs,
+            package_of,
         }
     }
 
-    /// Whether `caller` can call `callee` at all: same crate or a library.
+    /// Whether `caller` can call `callee` at all: same crate, or a library
+    /// the caller's package depends on (or its own library).
     fn visible(&self, caller: FnId, callee: FnId) -> bool {
-        let c = self.crate_of(callee);
-        c == self.crate_of(caller) || self.libs.contains(c)
+        let to = self.crate_of(callee);
+        let from = self.crate_of(caller);
+        if to == from {
+            return true;
+        }
+        if !self.libs.contains(to) {
+            return false;
+        }
+        match (self.package_of.get(from), self.package_of.get(to)) {
+            (Some(a), Some(b)) => std::ptr::eq(*a, *b) || a.dependencies.iter().any(|d| d == to),
+            _ => true,
+        }
     }
 
     fn crate_of(&self, f: FnId) -> &str {

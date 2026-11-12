@@ -20,7 +20,7 @@ mod window_frame;
 mod wires;
 
 pub use editor::{DEFAULT_TEMPLATE as DEFAULT_EDITOR, EditorCommand};
-pub use headless::{export_all, report};
+pub use headless::export_all;
 
 pub struct Options {
     /// Cargo project directory or single `.rs` file; `None` shows the start screen.

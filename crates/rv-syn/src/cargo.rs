@@ -14,6 +14,8 @@ pub struct PackageSpec {
     pub manifest_path: PathBuf,
     pub root_dir: PathBuf,
     pub in_workspace: bool,
+    /// Crate names of the normal and build dependencies.
+    pub dependencies: Vec<String>,
     pub targets: Vec<TargetSpec>,
 }
 
@@ -82,6 +84,7 @@ pub(crate) fn single_file(path: &Path) -> PackageSpec {
         manifest_path: path.to_path_buf(),
         root_dir: path.parent().unwrap_or(path).to_path_buf(),
         in_workspace: true,
+        dependencies: Vec::new(),
         targets: vec![TargetSpec {
             name,
             kind: TargetKind::Other,
@@ -115,11 +118,18 @@ fn metadata(manifest: &Path, in_workspace: bool) -> Result<Vec<PackageSpec>> {
             })
             .collect();
         targets.sort_by(|a, b| (a.kind, &a.name).cmp(&(b.kind, &b.name)));
+        let dependencies = pkg
+            .dependencies
+            .iter()
+            .filter(|d| d.kind != cargo_metadata::DependencyKind::Development)
+            .map(|d| d.name.replace('-', "_"))
+            .collect();
         out.push(PackageSpec {
             name: pkg.name.to_string(),
             manifest_path,
             root_dir,
             in_workspace,
+            dependencies,
             targets,
         });
     }

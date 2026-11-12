@@ -135,6 +135,7 @@ impl Builder {
             manifest_path: spec.manifest_path.clone(),
             root_dir: spec.root_dir.clone(),
             in_workspace: spec.in_workspace,
+            dependencies: spec.dependencies.clone(),
             targets,
             tests,
             unlinked_files: Vec::new(),

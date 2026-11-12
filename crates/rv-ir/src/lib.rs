@@ -96,6 +96,9 @@ pub struct Package {
     /// `false` for packages found below the opened folder that are not
     /// members of its workspace (e.g. stand-alone tools).
     pub in_workspace: bool,
+    /// Crate names (`-` written as `_`) of the packages this one depends on,
+    /// without dev-dependencies. Empty if unknown (single file).
+    pub dependencies: Vec<String>,
     /// Targets that are shown as module trees (lib, bins, build script).
     pub targets: Vec<Target>,
     /// Tests, benches and examples are only counted, not shown in detail.

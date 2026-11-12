@@ -4,49 +4,16 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write;
-use std::path::PathBuf;
 
-use rv_ir::{FnId, FrameRole, NodeId, NodeKind, Project, Span, StructKind};
+use rv_ir::{FnId, FrameRole, NodeId, NodeKind, Project, StructKind};
 
-use crate::report::{base_dir, short};
+use crate::locate::{Loc, short};
 use crate::{CallGraph, Facts, Program};
 
 /// Lines of an outline before it is cut.
 const MAX_OUTLINE: usize = 400;
 /// Entries of a list answer before it is cut.
 const MAX_ENTRIES: usize = 40;
-
-/// Formats locations relative to the project directory.
-struct Loc<'p> {
-    project: &'p Project,
-    base: PathBuf,
-}
-
-impl<'p> Loc<'p> {
-    fn new(project: &'p Project) -> Self {
-        Loc {
-            project,
-            base: base_dir(&project.root),
-        }
-    }
-
-    fn file(&self, span: &Span) -> String {
-        let path = &self.project.file(span.file).path;
-        path.strip_prefix(&self.base)
-            .unwrap_or(path)
-            .to_string_lossy()
-            .replace('\\', "/")
-    }
-
-    fn at(&self, span: &Span) -> String {
-        format!("{}:{}", self.file(span), span.start.line)
-    }
-
-    fn func(&self, f: FnId) -> String {
-        let func = self.project.function(f);
-        format!("`{}` ({})", func.qual_path, self.at(&func.name_span))
-    }
-}
 
 /// A function by full path or by any `::`-suffix of it (`App::update`,
 /// `update`). Several matches are an error that lists them.

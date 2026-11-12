@@ -4,10 +4,10 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write;
-use std::path::{Path, PathBuf};
 
-use rv_ir::{Body, FnId, NodeId, NodeKind, Project, Severity, Span};
+use rv_ir::{FnId, NodeId, Project, Severity};
 
+use crate::locate::{Loc, short};
 use crate::{
     CallGraph, Facts, Program, Site, crates, entry_points, module_graph, op_effect, op_writes,
     program,
@@ -67,7 +67,7 @@ pub fn report_with(
 ) -> String {
     let mut r = Report {
         project,
-        base: base_dir(&project.root),
+        loc: Loc::new(project),
         out: String::new(),
         keywords: Vec::new(),
         not_followed: 0,
@@ -95,52 +95,13 @@ pub fn report_with(
 
 struct Report<'p> {
     project: &'p Project,
-    /// Paths are shown relative to this directory.
-    base: PathBuf,
+    loc: Loc<'p>,
     out: String,
     /// (category, names) in order of appearance.
     keywords: Vec<(&'static str, Vec<String>)>,
     /// Sites where a value is handed on in a way the analysis does not follow.
     not_followed: usize,
     unreached: usize,
-}
-
-pub(crate) fn base_dir(root: &Path) -> PathBuf {
-    if root.is_file() {
-        root.parent().map(Path::to_path_buf).unwrap_or_default()
-    } else {
-        root.to_path_buf()
-    }
-}
-
-/// Last two path segments: `Zyklus::fahren`, `task::run`.
-pub(crate) fn short(qual: &str) -> String {
-    let parts: Vec<&str> = qual.rsplitn(3, "::").collect();
-    match parts.as_slice() {
-        [last, prev, ..] => format!("{prev}::{last}"),
-        _ => qual.to_string(),
-    }
-}
-
-/// Nesting depth of structures in a body (the function itself is 0).
-fn depth(body: &Body) -> usize {
-    let is_structure = |n: NodeId| matches!(body.node(n).kind, NodeKind::Structure { .. });
-    (0..body.nodes.len())
-        .map(|i| NodeId(i as u32))
-        .filter(|&n| is_structure(n))
-        .map(|n| {
-            let mut d = 0;
-            let mut cur = body.node(n).parent;
-            while let Some(p) = cur {
-                if is_structure(p) {
-                    d += 1;
-                }
-                cur = body.node(p).parent;
-            }
-            d
-        })
-        .max()
-        .unwrap_or(0)
 }
 
 /// Module path cut to `crate::top_module`.
@@ -170,38 +131,9 @@ impl Report<'_> {
         }
     }
 
-    fn path(&self, path: &Path) -> String {
-        path.strip_prefix(&self.base)
-            .unwrap_or(path)
-            .to_string_lossy()
-            .replace('\\', "/")
-    }
-
-    fn loc(&self, span: &Span) -> String {
-        format!(
-            "{}:{}",
-            self.path(&self.project.file(span.file).path),
-            span.start.line
-        )
-    }
-
-    /// `` `a::b::f` (src/b.rs:12) ``
-    fn func(&self, f: FnId) -> String {
-        let func = self.project.function(f);
-        format!("`{}` ({})", func.qual_path, self.loc(&func.name_span))
-    }
-
-    /// Location of a node, falling back to the function.
-    fn node_loc(&self, f: FnId, node: NodeId) -> String {
-        let func = self.project.function(f);
-        match &func.body {
-            Some(body) if node.index() < body.nodes.len() => self.loc(&body.node(node).span),
-            _ => self.loc(&func.name_span),
-        }
-    }
-
     fn header(&mut self) {
         let name = self
+            .loc
             .base
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -237,7 +169,7 @@ impl Report<'_> {
                 "- package `{}`{outside}: {} — {}",
                 pkg.name,
                 targets.join(", "),
-                self.path(&pkg.manifest_path)
+                self.loc.path(&pkg.manifest_path)
             ));
         }
         let lines: usize = p.files.iter().map(|f| f.text.lines().count()).sum();
@@ -274,7 +206,7 @@ impl Report<'_> {
         if entries.is_empty() {
             self.line("- entry points: none (library only)");
         } else {
-            let list: Vec<String> = entries.iter().map(|&f| self.func(f)).collect();
+            let list: Vec<String> = entries.iter().map(|&f| self.loc.func(f)).collect();
             self.line(format!("- entry points: {}", list.join(", ")));
         }
         let problems: Vec<_> = p
@@ -286,8 +218,8 @@ impl Report<'_> {
             self.line(format!("- loading problems: {}", problems.len()));
             for d in problems.iter().take(5) {
                 let at = match (&d.span, &d.file) {
-                    (Some(s), _) => format!("{}: ", self.loc(s)),
-                    (None, Some(f)) => format!("{}: ", self.path(f)),
+                    (Some(s), _) => format!("{}: ", self.loc.at(s)),
+                    (None, Some(f)) => format!("{}: ", self.loc.path(f)),
                     _ => String::new(),
                 };
                 self.line(format!("  - {at}{}", d.message));
@@ -328,7 +260,7 @@ impl Report<'_> {
                     text,
                     " — started by {} at {} in `{}`",
                     by.join("/"),
-                    self.node_loc(f, node),
+                    self.loc.node(f, node),
                     p.function(f).qual_path
                 );
                 self.keyword(
@@ -336,7 +268,12 @@ impl Report<'_> {
                     short(&p.function(f).qual_path),
                 );
             }
-            let entries: Vec<String> = t.entries.iter().take(4).map(|&f| self.func(f)).collect();
+            let entries: Vec<String> = t
+                .entries
+                .iter()
+                .take(4)
+                .map(|&f| self.loc.func(f))
+                .collect();
             if !entries.is_empty() {
                 let _ = write!(text, "; calls {}", entries.join(", "));
                 if t.entries.len() > 4 {
@@ -396,7 +333,7 @@ impl Report<'_> {
             for &(f, node) in program.unreached.iter().take(MAX_LIST) {
                 self.line(format!(
                     "- {} in `{}`",
-                    self.node_loc(f, node),
+                    self.loc.node(f, node),
                     p.function(f).qual_path
                 ));
             }
@@ -437,7 +374,7 @@ impl Report<'_> {
                 .collect();
             lines.sort_unstable();
             lines.dedup();
-            let file = self.path(
+            let file = self.loc.path(
                 &self
                     .project
                     .file(self.project.function(*f).name_span.file)
@@ -497,7 +434,7 @@ impl Report<'_> {
             let _ = write!(
                 text,
                 ", created at {} in `{}`",
-                self.node_loc(c.site.0, c.site.1),
+                self.loc.node(c.site.0, c.site.1),
                 short(&self.project.function(c.site.0).qual_path)
             );
             self.line(text);
@@ -540,7 +477,7 @@ impl Report<'_> {
             let _ = write!(
                 text,
                 "; created at {} in `{}`",
-                self.node_loc(sh.site.0, sh.site.1),
+                self.loc.node(sh.site.0, sh.site.1),
                 short(&self.project.function(sh.site.0).qual_path)
             );
             self.line(text);
@@ -565,7 +502,7 @@ impl Report<'_> {
                     "- {} waits for {} at {} in `{}`",
                     Self::thread_ref(program, w.thread),
                     Self::thread_ref(program, j.thread),
-                    self.node_loc(w.func, w.node),
+                    self.loc.node(w.func, w.node),
                     short(&self.project.function(w.func).qual_path)
                 ));
             }
@@ -597,7 +534,7 @@ impl Report<'_> {
                 let file = n
                     .modules
                     .first()
-                    .map(|&m| self.path(&p.file(p.module(m).file).path))
+                    .map(|&m| self.loc.path(&p.file(p.module(m).file).path))
                     .unwrap_or_default();
                 let mut text = format!(
                     "- `{}` ({file}): {} lines, {} functions",
@@ -635,13 +572,17 @@ impl Report<'_> {
 
     fn hot_spots(&mut self, calls: &CallGraph) {
         let p = self.project;
-        let mut sized: Vec<(FnId, u32, usize)> = p
+        let mut sized: Vec<(FnId, u32, u32)> = p
             .functions
             .iter()
             .enumerate()
             .filter_map(|(i, f)| {
                 let body = f.body.as_ref()?;
-                Some((FnId(i as u32), f.span.line_count(), depth(body)))
+                Some((
+                    FnId(i as u32),
+                    f.span.line_count(),
+                    crate::health::nesting(body),
+                ))
             })
             .collect();
         if sized.is_empty() {
@@ -654,7 +595,7 @@ impl Report<'_> {
         sized.sort_by_key(|&(f, lines, _)| (std::cmp::Reverse(lines), f));
         for &(f, lines, d) in sized.iter().take(MAX_LIST) {
             self.keyword("largest functions", short(&p.function(f).qual_path));
-            self.line(format!("- {}: {lines} lines, depth {d}", self.func(f)));
+            self.line(format!("- {}: {lines} lines, depth {d}", self.loc.func(f)));
         }
         self.line("");
         let mut callers: HashMap<FnId, BTreeSet<FnId>> = HashMap::new();
@@ -670,7 +611,7 @@ impl Report<'_> {
             self.line("");
             for &(f, n) in used.iter().take(MAX_LIST).filter(|&&(_, n)| n > 1) {
                 self.keyword("most called functions", short(&p.function(f).qual_path));
-                self.line(format!("- {}: {n} callers", self.func(f)));
+                self.line(format!("- {}: {n} callers", self.loc.func(f)));
             }
             self.line("");
         }
