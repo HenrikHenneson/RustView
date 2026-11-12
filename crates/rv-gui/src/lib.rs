@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 mod app;
 mod callgraph_view;
+mod canvas;
 mod code_view;
 mod comm_view;
 mod diagram;
@@ -12,10 +13,13 @@ mod export;
 mod headless;
 mod highlight;
 mod loader;
+mod lookup;
 mod program_view;
 mod report_view;
+mod style;
 mod threads;
 mod tree;
+mod widgets;
 mod window_frame;
 mod wires;
 

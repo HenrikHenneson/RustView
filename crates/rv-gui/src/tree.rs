@@ -108,26 +108,7 @@ impl TreeView {
                     });
             }
             if !pkg.unlinked_files.is_empty() {
-                egui::CollapsingHeader::new(
-                    RichText::new(format!(
-                        "not in any module tree ({})",
-                        pkg.unlinked_files.len()
-                    ))
-                    .weak(),
-                )
-                .id_salt(("unlinked", &pkg.name))
-                .show(ui, |ui| {
-                    for &f in &pkg.unlinked_files {
-                        let path = &project.file(f).path;
-                        let shown = path.strip_prefix(&pkg.root_dir).unwrap_or(path);
-                        if ui
-                            .selectable_label(false, shown.display().to_string())
-                            .clicked()
-                        {
-                            *action = TreeAction::OpenFile(f);
-                        }
-                    }
-                });
+                unlinked_files(ui, project, pkg, action);
             }
         });
         resp.header_response
@@ -260,6 +241,30 @@ impl TreeView {
             ui.weak(format!("… {} more", hits - MAX_SEARCH_HITS));
         }
     }
+}
+
+/// The files of a package that no `mod` declaration reaches, to open them.
+fn unlinked_files(ui: &mut Ui, project: &Project, pkg: &rv_ir::Package, action: &mut TreeAction) {
+    egui::CollapsingHeader::new(
+        RichText::new(format!(
+            "not in any module tree ({})",
+            pkg.unlinked_files.len()
+        ))
+        .weak(),
+    )
+    .id_salt(("unlinked", &pkg.name))
+    .show(ui, |ui| {
+        for &f in &pkg.unlinked_files {
+            let path = &project.file(f).path;
+            let shown = path.strip_prefix(&pkg.root_dir).unwrap_or(path);
+            if ui
+                .selectable_label(false, shown.display().to_string())
+                .clicked()
+            {
+                *action = TreeAction::OpenFile(f);
+            }
+        }
+    });
 }
 
 fn fn_label(func: &rv_ir::Function) -> RichText {
