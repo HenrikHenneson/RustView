@@ -3,7 +3,7 @@
 use egui::{Color32, vec2};
 
 use super::model::{LINE, LineKind, ModuleLayout, PAD, edge_width};
-use crate::export::Svg;
+use crate::export::{Svg, TextStyle};
 use crate::style::{THREAD, light};
 
 /// Free space to the right of and below the graph.
@@ -31,13 +31,10 @@ pub(crate) fn module_svg(layout: &ModuleLayout) -> String {
                 LineKind::Threads => (11.5, THREAD),
                 LineKind::Size => (11.5, light::WEAK_TEXT),
             };
-            svg.text(
+            svg.label(
                 layout.box_of(i).min + vec2(PAD, PAD + k as f32 * LINE),
                 text,
-                size,
-                color,
-                *kind == LineKind::Name,
-                false,
+                TextStyle::new(size, color, *kind == LineKind::Name, false),
             );
         }
     }

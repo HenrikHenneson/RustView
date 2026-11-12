@@ -3,7 +3,7 @@
 use egui::{Color32, Pos2, Rect, vec2};
 
 use super::layout::{Arrow, Block, BlockKind, GraphLayout, LINE, LineStyle, PAD};
-use crate::export::Svg;
+use crate::export::{Svg, TextStyle};
 use crate::style::{SHARED, THREAD, light};
 
 /// Border of the main thread's box.
@@ -49,14 +49,11 @@ fn arrow_label(svg: &mut Svg, mid: Pos2, label: &str, color: Color32) {
         None,
         3.0,
     );
-    svg.text_fit(
+    svg.label_fit(
         mid - vec2(w / 2.0 - 2.0, 6.5),
         label,
-        LABEL_FONT,
-        color,
-        true,
-        false,
-        Some(w - 4.0),
+        TextStyle::new(LABEL_FONT, color, true, false),
+        w - 4.0,
     );
 }
 
@@ -73,13 +70,10 @@ fn block(svg: &mut Svg, b: &Block) {
             LineStyle::Normal => (12.0, light::TEXT, true, false),
             LineStyle::Weak => (12.0, light::WEAK_TEXT, false, false),
         };
-        svg.text(
+        svg.label(
             b.rect.min + vec2(PAD, PAD + i as f32 * LINE),
             text,
-            size,
-            color,
-            mono,
-            bold,
+            TextStyle::new(size, color, mono, bold),
         );
     }
 }

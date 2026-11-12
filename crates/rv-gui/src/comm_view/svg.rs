@@ -4,7 +4,7 @@ use egui::{Color32, Rect, Vec2, pos2, vec2};
 use rv_analysis::Program;
 
 use super::matrix::{Matrix, chip, thread_label};
-use crate::export::Svg;
+use crate::export::{Svg, TextStyle};
 
 /// Estimated width of a character.
 const CH: f32 = 7.0;
@@ -15,7 +15,13 @@ const FONT: f32 = 12.0;
 const TEXT_TOP: f32 = 4.0;
 /// Height of the header row.
 const HEAD_H: f32 = LINE + PAD;
-const HEAD_COLOR: Color32 = Color32::from_gray(30);
+/// Thread names in the head row and column.
+const HEAD: TextStyle = TextStyle {
+    size: FONT,
+    color: Color32::from_gray(30),
+    mono: false,
+    bold: true,
+};
 /// The diagonal: a thread with itself.
 const SELF_COLOR: Color32 = Color32::from_gray(225);
 const GRID_COLOR: Color32 = Color32::from_gray(200);
@@ -93,12 +99,12 @@ pub fn matrix_svg(program: &Program, matrix: &Matrix) -> String {
     let mut svg = Svg::new(table.size);
     for (ci, &c) in matrix.threads.iter().enumerate() {
         let pos = pos2(table.xs[ci + 1] + PAD, TEXT_TOP);
-        svg.text(pos, &format!("#{c}"), FONT, HEAD_COLOR, false, true);
+        svg.label(pos, &format!("#{c}"), HEAD);
     }
     for (ri, &r) in matrix.threads.iter().enumerate() {
         let pos = pos2(PAD, table.ys[ri + 1] + TEXT_TOP);
         let label = thread_label(program, r);
-        svg.text(pos, &label, FONT, HEAD_COLOR, false, true);
+        svg.label(pos, &label, HEAD);
         row(&mut svg, program, matrix, &table, ri);
     }
     grid(&mut svg, &table);
@@ -118,7 +124,7 @@ fn row(svg: &mut Svg, program: &Program, matrix: &Matrix, table: &Table, ri: usi
         for (k, comm) in matrix.cell(r, c).enumerate() {
             let (text, color) = chip(program, comm);
             let pos = pos2(x + PAD, y + TEXT_TOP + k as f32 * LINE);
-            svg.text(pos, &text, FONT, color, true, false);
+            svg.label(pos, &text, TextStyle::new(FONT, color, true, false));
         }
     }
 }

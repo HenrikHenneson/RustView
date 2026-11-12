@@ -92,10 +92,24 @@ impl<'p> Resolver<'p> {
             path[0] = self_ty?;
         }
         if path.len() == 1 {
+            // `f(x)` where `f` is a parameter or local variable calls a
+            // closure or function pointer, not the function named `f`.
+            if self.is_local(caller, path[0]) {
+                return None;
+            }
             self.resolve_plain(caller, cands)
         } else {
             self.resolve_qualified(caller, &path.join("::"), cands)
         }
+    }
+
+    /// Whether `name` is a parameter or local variable of `caller`.
+    fn is_local(&self, caller: FnId, name: &str) -> bool {
+        self.project
+            .function(caller)
+            .body
+            .as_ref()
+            .is_some_and(|b| b.nodes.iter().flat_map(|n| &n.defs).any(|d| d.name == name))
     }
 
     /// `f()`: a function nested in the caller, a free function of the same

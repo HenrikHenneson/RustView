@@ -77,3 +77,20 @@ fn common_std_method_names_are_not_guessed() {
         "`v.len()` must not resolve to `Puffer::len`"
     );
 }
+
+#[test]
+fn calling_a_local_closure_is_not_a_call_to_a_function_of_that_name() {
+    let p = rv_syn::load_str(
+        "fn build() {}
+         fn run(build: impl Fn()) { build(); }
+         fn other() { let build = || (); build(); }
+         fn real() { build(); }",
+    );
+    let calls = CallGraph::new(&p);
+    let callers: Vec<&str> = calls
+        .edges
+        .iter()
+        .map(|e| p.function(e.caller).name.as_str())
+        .collect();
+    assert_eq!(callers, ["real"]);
+}

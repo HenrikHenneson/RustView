@@ -171,10 +171,22 @@ impl CallGraphView {
                 &key.crate_name,
                 key.depth,
             );
+            // Node indices belong to the old graph: find the same modules
+            // in the new one (they may be gone after a reload).
+            self.focus = self.same_node(self.focus, &layout);
+            self.selected = self.same_node(self.selected, &layout);
             self.graph = Some((key, layout));
             self.focus_calls = None;
             self.fit = true;
         }
+    }
+
+    /// The node of `new` with the same module path as `node` of the
+    /// current graph.
+    fn same_node(&self, node: Option<usize>, new: &ModuleLayout) -> Option<usize> {
+        let (_, old) = self.graph.as_ref()?;
+        let name = &old.graph.nodes.get(node?)?.key;
+        new.graph.nodes.iter().position(|n| n.key == *name)
     }
 
     /// Drills into the module wanted on the command line, once.

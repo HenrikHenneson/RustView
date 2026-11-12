@@ -94,38 +94,6 @@ impl Svg {
         );
     }
 
-    /// [`Self::label`] with the style given piece by piece, for the views
-    /// that still call it this way.
-    pub fn text(
-        &mut self,
-        pos: Pos2,
-        text: &str,
-        size: f32,
-        color: Color32,
-        mono: bool,
-        bold: bool,
-    ) {
-        self.label(pos, text, TextStyle::new(size, color, mono, bold));
-    }
-
-    /// [`Self::label_fit`] with the style given piece by piece, for the
-    /// views that still call it this way; without `width` like
-    /// [`Self::text`]. To be removed together with this `allow` once they
-    /// pass a [`TextStyle`].
-    #[allow(clippy::too_many_arguments)]
-    pub fn text_fit(
-        &mut self,
-        pos: Pos2,
-        text: &str,
-        size: f32,
-        color: Color32,
-        mono: bool,
-        bold: bool,
-        width: Option<f32>,
-    ) {
-        self.write_text(pos, text, TextStyle::new(size, color, mono, bold), width);
-    }
-
     pub fn polyline(&mut self, pts: &[Pos2], width: f32, color: Color32, dash: Option<(f32, f32)>) {
         if pts.len() < 2 {
             return;

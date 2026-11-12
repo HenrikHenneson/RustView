@@ -44,14 +44,23 @@ pub(crate) fn discover(path: &Path) -> Result<(Vec<PackageSpec>, Vec<Diagnostic>
         bail!("no Cargo.toml in {}", path.display());
     }
 
-    let mut diagnostics = Vec::new();
     let mut packages = metadata(&manifest, true)?;
+    let diagnostics = add_stray_packages(path, &manifest, &mut packages);
+    Ok((packages, diagnostics))
+}
 
-    // Packages below the opened folder that are not workspace members
-    // (stand-alone tools, excluded crates, nested workspaces).
+/// Adds the packages below `root` that are not workspace members
+/// (stand-alone tools, excluded crates, nested workspaces). Returns a
+/// warning for every manifest that could not be read.
+fn add_stray_packages(
+    root: &Path,
+    manifest: &Path,
+    packages: &mut Vec<PackageSpec>,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
     let mut known: HashSet<PathBuf> = packages.iter().map(|p| p.manifest_path.clone()).collect();
-    known.insert(manifest.clone());
-    for stray in find_manifests(path) {
+    known.insert(manifest.to_path_buf());
+    for stray in find_manifests(root) {
         if known.contains(&stray) {
             continue;
         }
@@ -72,7 +81,7 @@ pub(crate) fn discover(path: &Path) -> Result<(Vec<PackageSpec>, Vec<Diagnostic>
         }
         known.insert(stray);
     }
-    Ok((packages, diagnostics))
+    diagnostics
 }
 
 pub(crate) fn single_file(path: &Path) -> PackageSpec {
