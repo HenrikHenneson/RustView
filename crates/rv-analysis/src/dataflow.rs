@@ -61,6 +61,22 @@ impl DataFlow {
         &self.bindings[edge.binding]
     }
 
+    /// The binding called `name` that `node` uses (index into `bindings`).
+    pub fn binding_at(&self, node: NodeId, name: &str) -> Option<usize> {
+        self.edges
+            .iter()
+            .find(|e| e.to == node && self.bindings[e.binding].name == name)
+            .map(|e| e.binding)
+    }
+
+    /// The binding called `name` that `node` introduces (the last one if the
+    /// node defines the name more than once).
+    pub fn defined_at(&self, node: NodeId, name: &str) -> Option<usize> {
+        self.bindings
+            .iter()
+            .rposition(|b| b.def == node && b.name == name)
+    }
+
     /// One line per edge, sorted; for tests and debugging.
     pub fn dump(&self, body: &Body) -> String {
         let name = |id: NodeId| {
