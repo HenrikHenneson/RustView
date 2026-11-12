@@ -12,6 +12,7 @@ use rv_ir::Project;
 mod body;
 mod cargo;
 mod exprtree;
+mod manifest;
 mod modtree;
 mod source;
 mod text;

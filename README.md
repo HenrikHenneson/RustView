@@ -64,8 +64,11 @@ Platform notes:
   `libwayland-dev` and the `libxcb-*` development packages.
 - **macOS:** the binaries are not signed; on first start use right click →
   *Open* (or `xattr -d com.apple.quarantine rustview`).
-- `cargo` must be on the `PATH` (RustView runs `cargo metadata` to find the
-  packages of a workspace). The default editor command is VS Code's `code`.
+- RustView runs `cargo metadata` to find the packages of a workspace. Without
+  a Rust installation (no `cargo` on the `PATH` or in `~/.cargo/bin`) it reads
+  the `Cargo.toml` files itself, by Cargo's conventions for libraries,
+  binaries and workspace members. The default editor command is VS Code's
+  `code`.
 
 ## Usage
 
