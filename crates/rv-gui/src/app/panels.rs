@@ -7,7 +7,7 @@ use super::App;
 use crate::callgraph_view::CallGraphAction;
 use crate::code_view::CodeAction;
 use crate::diagram::DiagramAction;
-use crate::report_view::ReportAction;
+use crate::report_view::{ReportAction, ReportKind};
 use crate::threads::ThreadsAction;
 use crate::tree::TreeAction;
 use crate::widgets::loading;
@@ -18,6 +18,7 @@ pub(super) enum CenterTab {
     Threads,
     CallGraph,
     Report,
+    Maintainability,
 }
 
 impl App {
@@ -121,22 +122,33 @@ impl App {
                 .on_hover_text(
                     "Threads, communication, modules and hot spots as text, with links to the code",
                 );
+            ui.selectable_value(
+                &mut self.center,
+                CenterTab::Maintainability,
+                "Maintainability",
+            )
+            .on_hover_text("Score and the functions, files and module cycles over their targets");
         });
         ui.separator();
         match self.center {
             CenterTab::Diagram => self.diagram_panel(ui),
             CenterTab::Threads => self.threads_panel(ui),
             CenterTab::CallGraph => self.callgraph_panel(ui),
-            CenterTab::Report => self.report_panel(ui),
+            CenterTab::Report => self.report_panel(ui, ReportKind::Report),
+            CenterTab::Maintainability => self.report_panel(ui, ReportKind::Maintainability),
         }
     }
 
-    fn report_panel(&mut self, ui: &mut Ui) {
+    fn report_panel(&mut self, ui: &mut Ui, kind: ReportKind) {
         let Some(project) = &self.project else {
             loading(ui);
             return;
         };
-        match self.report.ui(ui, project, self.generation) {
+        let view = match kind {
+            ReportKind::Report => &mut self.report,
+            ReportKind::Maintainability => &mut self.maintainability,
+        };
+        match view.ui(ui, project, self.generation) {
             ReportAction::None => {}
             ReportAction::Message(msg) => self.show_message(msg),
             ReportAction::ShowFn(f) => self.select(f),

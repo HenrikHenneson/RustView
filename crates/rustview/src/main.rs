@@ -39,6 +39,10 @@ struct Cli {
     #[arg(long)]
     expressions: bool,
 
+    /// Start with the Report or Maintainability tab.
+    #[arg(long, value_enum, value_name = "TAB")]
+    tab: Option<Tab>,
+
     /// Write SVG and PNG files of the overviews (and of the `--select`ed
     /// function) to this directory instead of opening a window.
     #[arg(long, value_name = "DIR")]
@@ -61,6 +65,12 @@ struct Cli {
     /// limit or modules call each other in a cycle (for CI).
     #[arg(long, requires = "maintainability")]
     gate: bool,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum Tab {
+    Report,
+    Maintainability,
 }
 
 #[derive(Subcommand)]
@@ -107,6 +117,10 @@ fn main() -> anyhow::Result<()> {
         threads: cli.threads,
         callgraph: cli.callgraph,
         expressions: cli.expressions,
+        tab: cli.tab.map(|t| match t {
+            Tab::Report => rv_gui::StartTab::Report,
+            Tab::Maintainability => rv_gui::StartTab::Maintainability,
+        }),
     })
     .map_err(|e| anyhow::anyhow!("{e}"))
 }

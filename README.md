@@ -88,6 +88,7 @@ by dropping a folder or `.rs` file onto the window.
 - `--maintainability [FILE]` writes the [maintainability](#maintainability)
   findings of the project as Markdown; with `--gate` the exit status is 1 if
   anything is over a limit.
+- `--tab report` or `--tab maintainability` starts with that tab.
 - `--select ec_task::ethercat_task` selects a function after loading
   (full qualified path or any `::`-suffix of it).
 - `--editor` defaults to `code --goto {file}:{line}:{col}`.
@@ -177,7 +178,7 @@ Before larger changes run `rustview . --report target/rustview-report.md`
 and read it for the thread model and how the threads communicate.
 ```
 
-The same report is the *Report* tab of the GUI: formatted, with every
+The same report is the *Report* tab of the GUI (`--tab report`): formatted, with every
 `file:line` and function name as a link to the code and the diagram, and
 *Save…* / *Copy* buttons. On MultiTribDev (89k lines, 16 threads) it is about
 25 KB and is generated in a few seconds.
@@ -186,7 +187,11 @@ The same report is the *Report* tab of the GUI: formatted, with every
 
 `rustview <project> --maintainability [FILE]` measures how much of a project
 stays within limits that keep code readable and changeable, and lists what
-does not — worst first, each with `file:line`:
+does not — worst first, each with `file:line`. The same text is the
+*Maintainability* tab of the GUI, with links to the code and the diagrams
+(here RustView on its own source):
+
+![Maintainability tab: score, limits and findings](docs/screenshots/maintainability.png)
 
 | measure | target | limit |
 |---|---|---|

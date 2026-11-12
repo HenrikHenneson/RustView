@@ -7,13 +7,14 @@ use std::time::{Duration, Instant};
 use egui::Ui;
 use rv_ir::{FnId, Project};
 
+use crate::StartTab;
 use crate::callgraph_view::CallGraphView;
 use crate::code_view::CodeView;
 use crate::diagram::DiagramView;
 use crate::editor::EditorCommand;
 use crate::highlight::Highlighter;
 use crate::loader::Loader;
-use crate::report_view::ReportView;
+use crate::report_view::{ReportKind, ReportView};
 use crate::threads::ThreadsView;
 use crate::tree::TreeView;
 
@@ -44,6 +45,7 @@ pub struct App {
     threads: ThreadsView,
     callgraph: CallGraphView,
     report: ReportView,
+    maintainability: ReportView,
     center: CenterTab,
     selected: Option<FnId>,
     /// Last selection the tree was expanded to.
@@ -77,15 +79,16 @@ impl App {
             generation: 0,
             diagram: DiagramView::with_expressions(options.expressions),
             threads: ThreadsView::starting_in(options.threads.as_deref()),
-            center: if options.callgraph.is_some() {
-                CenterTab::CallGraph
-            } else if options.threads.is_some() {
-                CenterTab::Threads
-            } else {
-                CenterTab::Diagram
+            center: match options.tab {
+                Some(StartTab::Report) => CenterTab::Report,
+                Some(StartTab::Maintainability) => CenterTab::Maintainability,
+                None if options.callgraph.is_some() => CenterTab::CallGraph,
+                None if options.threads.is_some() => CenterTab::Threads,
+                None => CenterTab::Diagram,
             },
             callgraph: CallGraphView::opening(options.callgraph.as_deref()),
-            report: ReportView::default(),
+            report: ReportView::new(ReportKind::Report),
+            maintainability: ReportView::new(ReportKind::Maintainability),
             selected: None,
             revealed: None,
             tree: TreeView::default(),

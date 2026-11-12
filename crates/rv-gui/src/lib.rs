@@ -26,6 +26,13 @@ mod wires;
 pub use editor::{DEFAULT_TEMPLATE as DEFAULT_EDITOR, EditorCommand};
 pub use headless::export_all;
 
+/// A text tab to start with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StartTab {
+    Report,
+    Maintainability,
+}
+
 pub struct Options {
     /// Cargo project directory or single `.rs` file; `None` shows the start screen.
     pub path: Option<PathBuf>,
@@ -39,6 +46,8 @@ pub struct Options {
     pub callgraph: Option<String>,
     /// Expression level for whole functions from the start.
     pub expressions: bool,
+    /// Start with this tab instead of the diagram.
+    pub tab: Option<StartTab>,
 }
 
 pub fn run(options: Options) -> eframe::Result {
